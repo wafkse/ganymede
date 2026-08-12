@@ -1,0 +1,8 @@
+[package]
+name = "ganymede-pattern"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ganymede-pattern-core.workspace = true
+ganymede-pattern-macro.workspace = true
