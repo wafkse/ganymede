@@ -1,0 +1,15 @@
+[package]
+name = "ganymede"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ganymede-elf.workspace = true
+ganymede-linker-gnu.workspace = true
+ganymede-module.workspace = true
+ganymede-process.workspace = true
+ganymede-text.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+catalejo.workspace = true
