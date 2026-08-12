@@ -1,0 +1,36 @@
+[workspace]
+members = [
+    "ganymede",
+    "ganymede-process",
+    "ganymede-text",
+    "ganymede-elf",
+    "ganymede-linker-gnu",
+    "ganymede-module",
+    "ganymede-pattern-core",
+    "ganymede-pattern-macro",
+    "ganymede-pattern",
+]
+resolver = "3"
+
+[workspace.dependencies]
+bitflags = "2.10"
+catalejo = { path = "../catalejo/catalejo/" }
+ganymede-process = { path = "ganymede-process", version = "0.1.0" }
+ganymede-text = { path = "ganymede-text", version = "0.1.0" }
+ganymede-elf = { path = "ganymede-elf", version = "0.1.0" }
+ganymede-linker-gnu = { path = "ganymede-linker-gnu", version = "0.1.0" }
+ganymede-module = { path = "ganymede-module", version = "0.1.0" }
+ganymede-pattern-core = { path = "ganymede-pattern-core", version = "0.1.0" }
+ganymede-pattern-macro = { path = "ganymede-pattern-macro", version = "0.1.0" }
+ganymede-pattern = { path = "ganymede-pattern", version = "0.1.0" }
+thiserror = { version = "2.0.20" }
+memchr = "2.8.2"
+num-traits = "0.2.19"
+fearless_simd = "0.6.0"
+proc-macro2 = "1.0.106"
+quote = "1.0.46"
+bindgen = { version = "0.72.1" }
+prettyplease = "0.2"
+syn = { version = "2", features = ["full", "visit-mut"] }
+cc = { version = "1.4.2" }
+zerocopy = "0.8.56"
