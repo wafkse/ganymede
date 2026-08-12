@@ -1,0 +1,10 @@
+[package]
+name = "ganymede-module"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+catalejo.workspace = true
+ganymede-process.workspace = true
+ganymede-text.workspace = true
+thiserror.workspace = true
