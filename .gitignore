@@ -1,1 +1,9 @@
 /target
+
+# Ignore hidden files and directories unless explicitly retained below.
+.*
+**/.*
+!.gitignore
+!.editorconfig
+!.github/
+!.github/**
