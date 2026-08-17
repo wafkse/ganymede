@@ -36,22 +36,22 @@ fn modules(pid: u32) -> Result<Modules, Box<dyn std::error::Error>> {
 
 ## Pattern scanning
 
-`ganymede-pattern` exposes two scanning paths.
+`ganymede-pattern` exposes one pattern language and one scanner. The syntax is inspired by Pelite and supports exact bytes, wildcards, captures, fixed and ranged skips, followed references, alignment checks, integer reads, and alternatives.
 
-The fixed-width scanner is intended for direct byte and mask searches. The executable scanner uses a flat atom program inspired by Pelite and supports captures, variable skips, followed references, alignment checks, integer reads, alternatives, and explicit target pointer width.
+Patterns with linear fixed-width semantics are automatically compiled to an internal anchor and SIMD search plan. Patterns that need control flow, captures, reads, or followed references execute through the flat atom interpreter. Both paths preserve the same public `Pattern`, `Scanner`, and `Matches` API.
 
-Runtime parsing and the `program!` procedural macro lower to the same executable representation.
+Runtime parsing and the `pattern!` procedural macro use the same compiler.
 
 ```rust
 use ganymede_pattern::prelude::*;
 
-let program = program!("48 8B [1-4] 90");
-let scanner = ProgramScanner::new(program, PointerWidth::U64);
+let pattern = pattern!("48 8B [1-4] 90");
+let scanner = Scanner::new(pattern, PointerWidth::U64);
 
 assert_eq!(scanner.find(&[0x48, 0x8b, 0x00, 0x90]), Some(0));
 ```
 
-Executable scans operate on byte images. Candidate ranges limit where matches may begin, while followed references may resolve elsewhere inside the supplied image.
+Scans operate on byte images. Candidate ranges limit where matches may begin, while followed references may resolve elsewhere inside the supplied image.
 
 ## Workspace layout
 
