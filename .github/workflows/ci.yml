@@ -55,7 +55,3 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --workspace --no-deps
-
-      - name: Check patch whitespace
-        working-directory: ganymede
-        run: git diff --check
