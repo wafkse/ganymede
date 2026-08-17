@@ -1,6 +1,6 @@
 //! Validated GNU dynamic-table acquisition shared by supported ABIs.
 //!
-//! Construction proves table geometry once. Scanning operates over bounded complete entries while
+//! Construction proves table geometry once. Scanning operates over the complete described entries while
 //! the selected ELF word retains target width until each entry address crosses into process space.
 
 use catalejo::ffi;
@@ -9,13 +9,13 @@ use num_traits::{CheckedAdd, CheckedMul, Zero};
 
 use super::{
     Abi, AccessError, AddressOperation, DynamicSize, ElfError, Process, RawDynamic, SnapshotError,
-    SnapshotLimits, StructureKind, ViAddr,
+    StructureKind, ViAddr,
 };
 use crate::abi::DebugPointer;
 
 /// Validated process-resident GNU dynamic table.
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): `base` and `stride` retain the selected ELF width, `count` is nonzero and policy-bounded, and every entry address is checked before widening into process space.
+// NOTE(invariant): `base` and `stride` retain the selected ELF width, `count` is the exact nonzero number of complete entries described by the dynamic segment, and every entry address is checked before widening into process space.
 pub struct Table<'target, AbiType>
 where
     AbiType: Abi,
@@ -45,7 +45,6 @@ where
         target_process: &'target Process,
         target_dynamic: ViAddr,
         target_size: DynamicSize<AbiType>,
-        target_limits: SnapshotLimits,
     ) -> Result<Self, SnapshotError<AbiType>> {
         let stride_host = u64::try_from(core::mem::size_of::<RawDynamic<AbiType>>())
             .map_err(|_| SnapshotError::AddressOverflow(AddressOperation::DynamicOffset))?;
@@ -56,11 +55,9 @@ where
         let is_aligned = is_nonzero && target_size % stride == zero;
         let count_word = is_aligned.then(|| target_size / stride);
         let count = count_word.and_then(|target_count| target_count.try_into().ok());
-        let is_bounded = count.is_some_and(|target_count| {
-            target_count != 0 && target_count <= target_limits.dynamics().get()
-        });
+        let is_complete = count.is_some_and(|target_count| target_count != 0);
 
-        if !is_bounded {
+        if !is_complete {
             return Err(SnapshotError::InvalidDynamicSize(target_size));
         }
 

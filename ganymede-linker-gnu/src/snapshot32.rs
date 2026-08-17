@@ -1,4 +1,4 @@
-//! Bounded coherent GNU runtime-linker snapshots for i386 processes.
+//! Coherent GNU runtime-linker snapshots for i386 processes.
 //!
 //! This module is the concrete i386 profile surface over the shared GNU ABI family, snapshot model,
 //! and acquisition implementation.
@@ -10,7 +10,7 @@ pub use ganymede_text::BytePath;
 use crate::abi::{Abi, Gnu32};
 
 pub use crate::snapshot::{
-    AddressOperation, GNU_EXTENDED_PROTOCOL_VERSION, SnapshotLimits, StructureKind,
+    AddressOperation, GNU_EXTENDED_PROTOCOL_VERSION, RetryPolicy, StructureKind,
 };
 pub use error::{BusyReason, InconsistentReason, SnapshotError};
 
@@ -30,12 +30,12 @@ pub mod prelude {
     //! Convenience imports for GNU i386 coherent snapshots.
     //!
     //! The prelude keeps 32-bit pointer identity explicit while grouping the public snapshot,
-    //! failure, policy, and module concepts commonly consumed together.
+    //! failure, retry policy, and module concepts commonly consumed together.
 
     pub use super::{
         AddressOperation, BusyReason, GNU_EXTENDED_PROTOCOL_VERSION, GNU_I386_INTERPRETER_BASENAME,
-        InconsistentReason, Module, ModuleSnapshot, Namespace, Rendezvous, SnapshotError,
-        SnapshotLimits, StructureKind,
+        InconsistentReason, Module, ModuleSnapshot, Namespace, Rendezvous, RetryPolicy,
+        SnapshotError, StructureKind,
     };
 }
 

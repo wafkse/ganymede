@@ -8,11 +8,13 @@ extern crate alloc;
 
 use alloc::{collections::BTreeSet, vec::Vec};
 use catalejo::peephole::Coherent;
+use core::num::NonZeroUsize;
+
 use ganymede_text::BytePath;
 
 use super::{
-    Abi, AttemptError, BusyReason, GnuLinkMap, LinkerError, Process, RawMap, SnapshotError,
-    SnapshotLimits, Stable, StructureKind, ViAddr,
+    Abi, AttemptError, BusyReason, GnuLinkMap, LinkerError, Process, RawMap, SnapshotError, Stable,
+    StructureKind, ViAddr,
 };
 use crate::{
     abi::{ElfAddress, MapPointer},
@@ -24,24 +26,20 @@ use crate::{
 /// One validated forward-walk position pairing its public module with the stable ABI node.
 type Step<AbiType> = (Module<AbiType>, GnuLinkMap<AbiType>);
 
-/// Module-chain reader bound to one stability capability and finite policy.
+/// Module-chain reader bound to one stable process observation.
 #[derive(Debug, Clone, Copy)]
 pub struct Modules<'target> {
     /// Stable foreign access for this attempt.
     stable: Stable<'target>,
-
-    /// Finite traversal policy.
-    limits: SnapshotLimits,
 }
 
 impl<'target> Modules<'target> {
-    /// Bind module traversal to stable access and finite limits.
+    /// Bind module traversal to one stable process observation.
     #[inline]
     #[must_use]
-    pub const fn new(target_stable: Stable<'target>, target_limits: SnapshotLimits) -> Self {
+    pub const fn new(target_stable: Stable<'target>) -> Self {
         Self {
             stable: target_stable,
-            limits: target_limits,
         }
     }
 
@@ -49,15 +47,14 @@ impl<'target> Modules<'target> {
     #[inline]
     pub fn read<AbiType>(
         self,
-        target_debug: crate::abi::DebugPointer<AbiType>,
         target_head: MapPointer<AbiType>,
     ) -> Result<Walk<AbiType>, AttemptError<AbiType>>
     where
         AbiType: Abi,
         GnuLinkMap<AbiType>: Coherent<Value = RawMap<AbiType>, Context = (), Error = LinkerError>,
     {
-        let Self { stable, limits } = self;
-        let walk = Forward::<AbiType>::new(stable, limits, target_debug, target_head)
+        let Self { stable } = self;
+        let walk = Forward::<AbiType>::new(stable, target_head)
             .collect::<Result<Vec<_>, _>>()
             .map(Walk::new)?;
 
@@ -130,16 +127,16 @@ where
     fn module(
         self,
         target_stable: Stable<'_>,
-        target_limits: SnapshotLimits,
     ) -> Result<(Module<AbiType>, GnuLinkMap<AbiType>), AttemptError<AbiType>> {
         let Self { map, address, node } = self;
         let name_address = ViAddr::new(node.name().address().into());
-        let name = Process::read_c_string_bytes(
-            target_stable.process(),
-            name_address,
-            target_limits.names(),
-        )
-        .map_err(SnapshotError::from)?;
+        let name_bytes = target_stable
+            .snapshot()
+            .readable_bytes(name_address)
+            .and_then(NonZeroUsize::new)
+            .ok_or(SnapshotError::UnreadableName(name_address))?;
+        let name = Process::read_c_string_bytes(target_stable.process(), name_address, name_bytes)
+            .map_err(SnapshotError::from)?;
         let after = target_stable.lift::<AbiType, RawMap<AbiType>, GnuLinkMap<AbiType>>(
             address,
             StructureKind::LinkMap,
@@ -175,12 +172,6 @@ where
     /// Stable foreign access.
     stable: Stable<'target>,
 
-    /// Finite traversal policy.
-    limits: SnapshotLimits,
-
-    /// Owning namespace rendezvous.
-    debug: crate::abi::DebugPointer<AbiType>,
-
     /// Previously yielded link-map addresses.
     seen: BTreeSet<ElfAddress<AbiType>>,
 
@@ -197,18 +188,11 @@ where
     GnuLinkMap<AbiType>: Coherent<Value = RawMap<AbiType>, Context = (), Error = LinkerError>,
 {
     /// Construct a forward iterator at one namespace head.
-    fn new(
-        target_stable: Stable<'target>,
-        target_limits: SnapshotLimits,
-        target_debug: crate::abi::DebugPointer<AbiType>,
-        target_head: MapPointer<AbiType>,
-    ) -> Self {
+    fn new(target_stable: Stable<'target>, target_head: MapPointer<AbiType>) -> Self {
         let previous = MapPointer::<AbiType>::new(ElfAddress::<AbiType>::default());
 
         Self {
             stable: target_stable,
-            limits: target_limits,
-            debug: target_debug,
             seen: BTreeSet::new(),
             current: target_head,
             previous,
@@ -219,8 +203,6 @@ where
     fn step(&mut self) -> Result<Option<Step<AbiType>>, AttemptError<AbiType>> {
         let Self {
             stable,
-            limits,
-            debug,
             seen,
             current,
             previous,
@@ -228,12 +210,6 @@ where
 
         if current.null() {
             return Ok(None);
-        }
-
-        if seen.len() >= limits.modules().get() {
-            return Err(AttemptError::Inconsistent(InconsistentReason::ModuleBound(
-                *debug,
-            )));
         }
 
         if !seen.insert(current.address()) {
@@ -244,7 +220,7 @@ where
 
         let map = *current;
         let observation = StableMap::read(*stable, map)?.previous(*previous)?;
-        let (module, node) = observation.module(*stable, *limits)?;
+        let (module, node) = observation.module(*stable)?;
         let next = node.next();
 
         *previous = map;

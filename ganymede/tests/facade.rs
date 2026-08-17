@@ -7,7 +7,7 @@ mod tests {
     use catalejo::prelude::Subsystem;
     use ganymede::{
         elf::class::ElfClass,
-        prelude::{Inspection, Loader, Process, ProcessId, SnapshotLimits},
+        prelude::{Inspection, Loader, Process, ProcessId, RetryPolicy},
         text::BytePath,
     };
 
@@ -16,10 +16,10 @@ mod tests {
         let interpreter = BytePath::new(b"/lib64/ld-linux-x86-64.so.2");
         let loader = Loader::select(ElfClass::Elf64, &interpreter)
             .expect("known GNU x86-64 interpreter should select the backend");
-        let limits = SnapshotLimits::amd64();
+        let retry = RetryPolicy::standard();
 
         assert_eq!(loader, Loader::Gnu64);
-        assert_eq!(limits, ganymede::gnu::snapshot::SnapshotLimits::amd64());
+        assert_eq!(retry, ganymede::gnu::snapshot::RetryPolicy::standard());
     }
 
     #[test]

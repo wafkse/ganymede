@@ -1,6 +1,6 @@
 //! GNU runtime-linker interpretation over validated process images.
 //!
-//! This crate owns GNU-specific ABI observations, rendezvous semantics, bounded namespace traversal,
+//! This crate owns GNU-specific ABI observations, rendezvous semantics, namespace traversal,
 //! and stable loaded-image discovery. It depends on format and process layers without moving GNU
 //! protocol assumptions into either lower-level crate.
 #![deny(clippy::all, clippy::perf, clippy::nursery, clippy::pedantic)]
@@ -78,8 +78,8 @@ pub mod prelude {
     pub use crate::gnu32::{GnuDebug32, GnuDebugExtended32, GnuLinkMap32};
     pub use crate::gnu64::{GnuDebug64, GnuDebugExtended64, GnuLinkMap64};
     pub use crate::snapshot::{
-        AddressOperation, BytePath, Module, ModuleSnapshot, Namespace, Rendezvous, SnapshotError,
-        SnapshotLimits,
+        AddressOperation, BytePath, Module, ModuleSnapshot, Namespace, Rendezvous, RetryPolicy,
+        SnapshotError,
     };
     pub use crate::snapshot32::{
         BusyReason as BusyReason32, GNU_I386_INTERPRETER_BASENAME,

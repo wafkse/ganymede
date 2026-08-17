@@ -11,7 +11,7 @@ use catalejo::peephole::Coherent;
 
 use super::{
     Abi, AttemptError, BusyReason, GnuDebug, GnuDebugExtended, LinkerError, RawDebug, RawExtended,
-    SnapshotLimits, Stable, StructureKind, ViAddr, module::Modules,
+    Stable, StructureKind, ViAddr, module::Modules,
 };
 use crate::{
     abi::{DebugPointer, ElfAddress, ExtendedPointer},
@@ -98,19 +98,15 @@ where
 pub struct Namespaces<'target> {
     /// Stable foreign access.
     stable: Stable<'target>,
-
-    /// Finite namespace policy.
-    limits: SnapshotLimits,
 }
 
 impl<'target> Namespaces<'target> {
-    /// Bind namespace traversal to stable access and finite limits.
+    /// Bind namespace traversal to one stable process observation.
     #[inline]
     #[must_use]
-    pub const fn new(target_stable: Stable<'target>, target_limits: SnapshotLimits) -> Self {
+    pub const fn new(target_stable: Stable<'target>) -> Self {
         Self {
             stable: target_stable,
-            limits: target_limits,
         }
     }
 
@@ -128,9 +124,9 @@ impl<'target> Namespaces<'target> {
         super::GnuLinkMap<AbiType>:
             Coherent<Value = super::RawMap<AbiType>, Context = (), Error = LinkerError>,
     {
-        let Self { stable, limits } = self;
+        let Self { stable } = self;
         let initial = Consistent::<AbiType>::read(stable, target_debug)?;
-        let capture = Capture::new(stable, limits);
+        let capture = Capture::new(stable);
         let is_extended = initial.value().version() >= GNU_EXTENDED_PROTOCOL_VERSION;
 
         if !is_extended {
@@ -147,12 +143,6 @@ impl<'target> Namespaces<'target> {
         let mut namespaces = Vec::new();
 
         while cursor.nonnull() {
-            if namespaces.len() >= limits.namespaces().get() {
-                return Err(AttemptError::Inconsistent(
-                    InconsistentReason::NamespaceBound,
-                ));
-            }
-
             if !seen.insert(cursor.address()) {
                 return Err(AttemptError::Inconsistent(
                     InconsistentReason::NamespaceCycle(cursor),
@@ -189,22 +179,18 @@ impl<'target> Namespaces<'target> {
 
 /// One namespace capture interval.
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): `stable` and `limits` remain fixed while one namespace rendezvous is read before and after complete module validation.
+// NOTE(invariant): `stable` remains fixed while one namespace rendezvous is read before and after complete module validation.
 struct Capture<'target> {
     /// Stable foreign access.
     stable: Stable<'target>,
-
-    /// Finite module policy.
-    limits: SnapshotLimits,
 }
 
 impl<'target> Capture<'target> {
     /// Construct one namespace capture interval.
     #[inline]
-    const fn new(target_stable: Stable<'target>, target_limits: SnapshotLimits) -> Self {
+    const fn new(target_stable: Stable<'target>) -> Self {
         Self {
             stable: target_stable,
-            limits: target_limits,
         }
     }
 
@@ -221,10 +207,10 @@ impl<'target> Capture<'target> {
         super::GnuLinkMap<AbiType>:
             Coherent<Value = super::RawMap<AbiType>, Context = (), Error = LinkerError>,
     {
-        let Self { stable, limits } = self;
+        let Self { stable } = self;
         let debug = target_before.debug();
         let base = Consistent::<AbiType>::new(debug, target_before.base())?;
-        let walk = Modules::new(stable, limits).read::<AbiType>(debug, base.value().map())?;
+        let walk = Modules::new(stable).read::<AbiType>(base.value().map())?;
         let after = Probe::new(stable).read::<AbiType>(target_before)?;
         let _consistent = Consistent::<AbiType>::new(debug, after.base())?;
         let structure = target_before

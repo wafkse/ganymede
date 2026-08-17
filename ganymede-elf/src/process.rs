@@ -8,7 +8,7 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
-use core::{mem::MaybeUninit, num::NonZeroUsize};
+use core::mem::MaybeUninit;
 
 use catalejo::{address::ViAddr, ffi};
 use ganymede_process::process::{AccessError, Process, ReadError, Snapshot};
@@ -18,7 +18,7 @@ use num_traits::{CheckedAdd, CheckedMul, CheckedSub};
 use crate::{
     binding,
     class::{Class, Elf32, Elf64, ElfClass, ElfClassError, ProgramHeader},
-    dynamic::{DynamicSymbols, DynamicSymbolsError, SymbolLimits},
+    dynamic::{DynamicSymbols, DynamicSymbolsError},
     image::LoadBias,
     lift::{Dynamic, ElfError},
     symbol::Symbol,
@@ -87,7 +87,7 @@ where
 
 /// Segment relationships proven before a process image can be constructed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// NOTE(invariant): `load_bias` is derived from the unique `PT_PHDR`, `interpreter_address` and `dynamic` are translated with that same bias, and `interpreter_size` is nonzero, policy-bounded, and covered by its segment memory extent.
+// NOTE(invariant): `load_bias` is derived from the unique `PT_PHDR`, `interpreter_address` and `dynamic` are translated with that same bias, and `interpreter_size` is nonzero, host-representable, and covered by its segment memory extent.
 struct Segments<ClassType>
 where
     ClassType: Class,
@@ -139,15 +139,8 @@ where
     pub fn read(
         target_process: &'target Process,
         target_snapshot: &'target Snapshot,
-        target_program_header_limit: NonZeroUsize,
-        target_interpreter_limit: NonZeroUsize,
     ) -> Result<Self, ProcessImageError> {
-        let image = ProcessImage::read(
-            target_process,
-            target_snapshot,
-            target_program_header_limit,
-            target_interpreter_limit,
-        )?;
+        let image = ProcessImage::read(target_process, target_snapshot)?;
 
         Ok(Self {
             process: target_process,
@@ -188,7 +181,7 @@ where
 ///
 /// Construction ties Linux auxiliary metadata to the process-resident program-header table, proves
 /// the load bias from the unique `PT_PHDR`, validates exact interpreter bytes, and retains the unique
-/// dynamic segment under one finite policy.
+/// dynamic segment from validated segment geometry.
 #[derive(Debug, Clone)]
 // NOTE(invariant): The runtime class equals `ClassType`, every auxiliary address fits `ClassType::Word`, program headers retain the matching generated representation, and `PT_PHDR`, `PT_INTERP`, and `PT_DYNAMIC` satisfy the uniqueness and extent checks performed during construction.
 pub struct ProcessImage<ClassType>
@@ -221,13 +214,11 @@ where
     /// # Errors
     ///
     /// This fails when class proof, auxiliary metadata, program headers, interpreter bytes, dynamic
-    /// segment geometry, or protected process reads violate the image invariants or supplied bounds.
+    /// segment geometry, or protected process reads violate the image invariants.
     #[inline]
     pub fn read(
         target_process: &Process,
         target_snapshot: &Snapshot,
-        target_program_header_limit: NonZeroUsize,
-        target_interpreter_limit: NonZeroUsize,
     ) -> Result<Self, ProcessImageError> {
         let class = ElfClass::from_snapshot(target_snapshot)?;
 
@@ -242,11 +233,11 @@ where
         let target_phnum = Self::auxiliary(target_snapshot, binding::AT_PHNUM)?;
         let target_phent = Self::auxiliary(target_snapshot, binding::AT_PHENT)?;
 
-        Self::table(target_program_header_limit, target_phnum, target_phent)?;
+        Self::table(target_phnum, target_phent)?;
 
         let program_headers =
             Self::headers(target_process, target_phdr, target_phnum, target_phent)?;
-        let segments = Self::segments(target_interpreter_limit, target_phdr, &program_headers)?;
+        let segments = Self::segments(target_phdr, &program_headers)?;
         let Segments {
             load_bias,
             interpreter_address,
@@ -343,13 +334,11 @@ where
 
     /// Validate the program-header count and generated entry stride.
     fn table(
-        target_limit: NonZeroUsize,
         target_count: ClassType::Word,
         target_stride: ClassType::Word,
     ) -> Result<(), ProcessImageError> {
         let count: Option<usize> = target_count.try_into().ok();
-        let count_valid = count
-            .is_some_and(|target_count| target_count != 0 && target_count <= target_limit.get());
+        let count_valid = count.is_some_and(|target_count| target_count != 0);
         let host_stride = u64::try_from(core::mem::size_of::<ClassType::ProgramHeader>())
             .map_err(|_| ProcessImageError::InvalidClassLayout(ClassType::CLASS))?;
         let expected_stride = ClassType::Word::try_from(host_stride)
@@ -426,7 +415,6 @@ where
 
     /// Derive load bias and validate the unique interpreter and dynamic segments.
     fn segments(
-        target_interpreter_limit: NonZeroUsize,
         target_phdr: ClassType::Word,
         target_headers: &[ClassType::ProgramHeader],
     ) -> Result<Segments<ClassType>, ProcessImageError> {
@@ -479,9 +467,8 @@ where
         let (interpreter_virtual, interpreter_size, interpreter_memory) =
             interpreter_segment.ok_or(ProcessImageError::MissingInterpreter)?;
         let interpreter_size_host: Option<usize> = interpreter_size.try_into().ok();
-        let interpreter_size_valid = interpreter_size_host.is_some_and(|target_size| {
-            target_size != 0 && target_size <= target_interpreter_limit.get()
-        });
+        let interpreter_size_valid =
+            interpreter_size_host.is_some_and(|target_size| target_size != 0);
         let interpreter_memory_valid = interpreter_size <= interpreter_memory;
 
         if !interpreter_size_valid {
@@ -557,18 +544,18 @@ where
     /// # Errors
     ///
     /// This returns an error when dynamic metadata, hash metadata, or foreign symbol tables violate
-    /// the supplied finite policy.
+    /// their validated image geometry.
     #[inline]
     pub fn dynamic_symbols(
         &self,
         target_process: &Process,
-        target_limits: SymbolLimits,
     ) -> Result<DynamicSymbols<ClassType>, DynamicSymbolsError> {
         let Self {
             load_bias, dynamic, ..
         } = self;
+        let image = crate::loaded::LoadedImage::<ClassType>::read(target_process, *load_bias)?;
 
-        DynamicSymbols::read(target_process, *load_bias, dynamic.address(), target_limits)
+        DynamicSymbols::read_loaded(&image, dynamic.address())
     }
 }
 
@@ -614,7 +601,7 @@ pub enum ProcessImageError {
     #[error("generated layout does not fit {0:?}")]
     InvalidClassLayout(ElfClass),
 
-    /// Program-header count is empty or exceeds policy.
+    /// Program-header count is empty or cannot fit host indexing.
     #[error("invalid ELF program header count {0}")]
     InvalidProgramHeaderCount(u64),
 
@@ -638,7 +625,7 @@ pub enum ProcessImageError {
     #[error("missing PT_INTERP segment")]
     MissingInterpreter,
 
-    /// Interpreter payload is empty or exceeds policy.
+    /// Interpreter payload is empty or cannot fit host indexing.
     #[error("invalid interpreter size {0}")]
     InvalidInterpreterSize(u64),
 
@@ -731,16 +718,15 @@ mod tests {
 
     #[test]
     fn program_table_validation_uses_each_generated_stride() {
-        let limit = const { NonZeroUsize::new(4).expect("test limit must be nonzero") };
         let stride32 = u32::try_from(core::mem::size_of::<binding::Elf32_Phdr>())
             .expect("ELF32 program-header size must fit u32");
         let stride64 = u64::try_from(core::mem::size_of::<binding::Elf64_Phdr>())
             .expect("ELF64 program-header size must fit u64");
 
-        assert!(ProcessImage::<Elf32>::table(limit, 1, stride32).is_ok());
-        assert!(ProcessImage::<Elf64>::table(limit, 1, stride64).is_ok());
-        assert!(ProcessImage::<Elf32>::table(limit, 0, stride32).is_err());
-        assert!(ProcessImage::<Elf64>::table(limit, 5, stride64).is_err());
+        assert!(ProcessImage::<Elf32>::table(1, stride32).is_ok());
+        assert!(ProcessImage::<Elf64>::table(1, stride64).is_ok());
+        assert!(ProcessImage::<Elf32>::table(0, stride32).is_err());
+        assert!(ProcessImage::<Elf64>::table(5, stride64).is_ok());
     }
 
     #[test]
@@ -786,8 +772,7 @@ mod tests {
                 p_align: 4,
             },
         ];
-        let limit = const { NonZeroUsize::new(64).expect("test limit must be nonzero") };
-        let segments = test_ok(ProcessImage::<Elf32>::segments(limit, 0x1034, &headers));
+        let segments = test_ok(ProcessImage::<Elf32>::segments(0x1034, &headers));
         let Segments {
             load_bias,
             interpreter_address,
@@ -835,8 +820,7 @@ mod tests {
                 p_align: 8,
             },
         ];
-        let limit = const { NonZeroUsize::new(64).expect("test limit must be nonzero") };
-        let segments = test_ok(ProcessImage::<Elf64>::segments(limit, 0x1040, &headers));
+        let segments = test_ok(ProcessImage::<Elf64>::segments(0x1040, &headers));
         let Segments {
             load_bias,
             interpreter_address,

@@ -1,11 +1,11 @@
-//! Bounded coherent GNU runtime-linker snapshots for x86-64 processes.
+//! Coherent GNU runtime-linker snapshots for x86-64 processes.
 //!
 //! This module is the concrete x86-64 profile surface over the shared GNU ABI family, snapshot
 //! model, and acquisition implementation.
 
 mod error;
 
-mod limits;
+mod retry;
 
 pub mod model;
 
@@ -15,7 +15,7 @@ use crate::abi::{Abi, Gnu64};
 
 pub use crate::error::{AddressOperation, StructureKind};
 pub use error::{BusyReason, InconsistentReason, SnapshotError};
-pub use limits::SnapshotLimits;
+pub use retry::RetryPolicy;
 
 /// Concrete GNU x86-64 module observation.
 pub type Module = model::Module<Gnu64>;
@@ -33,12 +33,12 @@ pub mod prelude {
     //! Convenience imports for GNU x86-64 coherent snapshots.
     //!
     //! The prelude keeps the target width explicit while grouping the public snapshot, failure,
-    //! policy, and module concepts commonly consumed together.
+    //! retry policy and module concepts commonly consumed together.
 
     pub use super::{
         AddressOperation, BusyReason, GNU_EXTENDED_PROTOCOL_VERSION,
         GNU_X86_64_INTERPRETER_BASENAME, InconsistentReason, Module, ModuleSnapshot, Namespace,
-        Rendezvous, SnapshotError, SnapshotLimits, StructureKind,
+        Rendezvous, RetryPolicy, SnapshotError, StructureKind,
     };
 }
 

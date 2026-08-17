@@ -42,7 +42,7 @@ pub enum StructureKind {
     LinkMap,
 }
 
-/// Retryable loader mutation retained after one bounded acquisition attempt.
+/// Retryable loader mutation retained after one complete acquisition attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BusyReason<AbiType>
 where
@@ -89,10 +89,6 @@ where
     #[error("GNU namespace cycle at {0:?}")]
     NamespaceCycle(ExtendedPointer<AbiType>),
 
-    /// Extended namespace chain exceeds policy.
-    #[error("GNU namespace chain exceeds policy")]
-    NamespaceBound,
-
     /// Secondary namespace lacks the required extended GNU protocol.
     #[error("GNU namespace {debug:?} uses unsupported protocol version {version}")]
     NamespaceProtocol {
@@ -106,10 +102,6 @@ where
     /// Namespace link-map chain contains a cycle.
     #[error("GNU link-map cycle at {0:?}")]
     ModuleCycle(MapPointer<AbiType>),
-
-    /// Namespace link-map chain exceeds policy.
-    #[error("GNU link-map chain for {0:?} exceeds policy")]
-    ModuleBound(DebugPointer<AbiType>),
 
     /// Forward traversal observed an unexpected previous edge.
     #[error("GNU link-map {map:?} expected previous {expected:?} but observed {observed:?}")]

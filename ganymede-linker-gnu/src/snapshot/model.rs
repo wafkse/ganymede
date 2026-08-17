@@ -1,6 +1,6 @@
 //! Coherent GNU snapshot records shared by supported target ABIs.
 //!
-//! These values are constructed only after stable foreign reads and bounded graph validation. One
+//! These values are constructed only after stable foreign reads and complete graph validation. One
 //! sealed `AbiType` retains all target pointer and ELF width relationships without independent generic
 //! choices.
 
@@ -10,9 +10,10 @@ use alloc::boxed::Box;
 use catalejo::address::ViAddr;
 use ganymede_elf::{
     class::Class,
-    dynamic::{DynamicSymbols, DynamicSymbolsError, SymbolLimits},
+    dynamic::{DynamicSymbols, DynamicSymbolsError},
     image::LoadBias,
     lift::{Dynamic, ElfError},
+    loaded::LoadedImage,
     symbol::Symbol,
 };
 use ganymede_text::BytePath;
@@ -178,12 +179,11 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when dynamic symbol metadata violates the supplied finite policy.
+    /// Returns an error when dynamic symbol metadata violates validated loaded-image geometry.
     #[inline]
     pub fn symbols(
         &self,
         target_process: &ganymede_process::process::Process,
-        target_limits: SymbolLimits,
     ) -> Result<DynamicSymbols<AbiType::Elf>, DynamicSymbolsError>
     where
         Dynamic<AbiType::Elf>: catalejo::prelude::Lift<
@@ -200,7 +200,9 @@ where
         let load_bias = LoadBias::<AbiType::Elf>::new(self.bias());
         let dynamic = ViAddr::new(self.dynamic().address().into());
 
-        DynamicSymbols::read(target_process, load_bias, dynamic, target_limits)
+        let image = LoadedImage::<AbiType::Elf>::read(target_process, load_bias)?;
+
+        DynamicSymbols::read_loaded(&image, dynamic)
     }
 }
 
@@ -283,7 +285,7 @@ where
 
 /// Coherent GNU namespace whose complete link-map chain passed forward and reverse validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// NOTE(invariant): The rendezvous remained stable while every retained `AbiType` module passed bounded forward and reverse graph validation.
+// NOTE(invariant): The rendezvous remained stable while every retained `AbiType` module passed complete forward and reverse graph validation.
 pub struct Namespace<AbiType>
 where
     AbiType: Abi,
@@ -332,7 +334,7 @@ where
 
 /// Complete coherent GNU loader observation rooted in one validated process image.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// NOTE(invariant): The main ELF image uses the class selected by `AbiType`, the interpreter proves that GNU profile, and every namespace was captured within finite stability and graph bounds.
+// NOTE(invariant): The main ELF image uses the class selected by `AbiType`, the interpreter proves that GNU profile, and every namespace passed stable complete graph validation.
 pub struct Snapshot<AbiType>
 where
     AbiType: Abi,
@@ -346,7 +348,7 @@ where
     /// Canonical primary target rendezvous pointer.
     debug: DebugPointer<AbiType>,
 
-    /// Stable namespaces captured within finite bounds.
+    /// Stable namespaces retained in traversal order.
     namespaces: Box<[Namespace<AbiType>]>,
 }
 

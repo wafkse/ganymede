@@ -11,7 +11,7 @@ use catalejo::ffi::binding;
 use catalejo::{
     address::{ViAddr, ViRange},
     ffi,
-    manage::{Manage, Rebased},
+    manage::{Access, Manage, Rebased},
     prelude::{ByteCopyStatus, Faultable, Foreign, Target, Unassociated},
 };
 
@@ -70,8 +70,26 @@ impl Process {
         manager_context
             .source::<T>(target_address)
             .map_err(AccessError::Io)?
-            .and_then(catalejo::manage::Access::foreign)
+            .and_then(Access::foreign)
             .ok_or(AccessError::Unavailable(target_address))
+    }
+
+    /// Resolve a typed sparse access intent through this process manager.
+    ///
+    /// The original peephole is reused when it can still contain the projected value. Otherwise
+    /// Catalejo may locate or open another managed peephole for the same process address.
+    ///
+    /// A returned [`None`] means the intent could not be represented by the active manager. The
+    /// lower-level refresh contract intentionally does not preserve manager I/O failure identity.
+    #[inline]
+    #[must_use]
+    pub fn resolve<T>(&self, target_access: Access<T>) -> Option<Foreign<T>>
+    where
+        T: Unassociated,
+    {
+        let Self(manager_context) = self;
+
+        manager_context.refresh(target_access)
     }
 
     /// Read a fault-safe primitive from the target process.
@@ -522,6 +540,29 @@ impl Snapshot {
             .filter(|target_region| Region::contains(target_region, target_address))
     }
 
+    /// Determine the readable byte extent beginning at one mapped process address.
+    ///
+    /// The returned extent ends at the containing kernel mapping boundary. Unmapped or unreadable
+    /// addresses return [`None`]. The value is suitable for structurally bounding foreign byte
+    /// strings without imposing a format-specific size policy.
+    #[inline]
+    #[must_use]
+    pub fn readable_bytes(&self, target_address: ViAddr) -> Option<usize> {
+        let region = self.region_at(target_address)?;
+        let readable = region.attributes().contains(Attributes::READ);
+
+        if !readable {
+            return None;
+        }
+
+        let range = region.range();
+        let ViAddr(start) = target_address;
+        let ViAddr(end) = range.end_address;
+        let bytes = end.checked_sub(start)?;
+
+        usize::try_from(bytes).ok()
+    }
+
     /// Borrow the kernel resident auxiliary vector.
     #[inline]
     #[must_use]
@@ -711,6 +752,20 @@ mod tests {
         assert!(region.contains(ViAddr::new(0x1fff)));
         assert!(!region.contains(ViAddr::new(0x2000)));
         assert_eq!(region.backing(), Backing::Anonymous);
+    }
+
+    #[test]
+    fn snapshot_readable_extent_uses_containing_mapping_boundary() {
+        let region_list = vec![anonymous_region(0x1000, 0x2000)];
+        let snapshot = Snapshot {
+            region_list,
+            auxiliary_vector: Vec::new(),
+            environment_range: ViRange::new(ViAddr::new(0), ViAddr::new(0)),
+            argument_range: ViRange::new(ViAddr::new(0), ViAddr::new(0)),
+        };
+
+        assert_eq!(snapshot.readable_bytes(ViAddr::new(0x1800)), Some(0x800));
+        assert_eq!(snapshot.readable_bytes(ViAddr::new(0x2000)), None);
     }
 
     #[test]

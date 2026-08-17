@@ -1,7 +1,7 @@
 //! Coherent GNU runtime-linker snapshot acquisition shared by supported ABIs.
 //!
 //! One sealed GNU ABI family selects target-width records and pointers. The acquisition protocol,
-//! bounded stabilization, namespace traversal, graph validation, and retry behavior are implemented
+//! stabilization, namespace traversal, graph validation, and retry behavior are implemented
 //! once. Conversion to process-wide addresses occurs only at explicit foreign-memory boundaries.
 
 extern crate alloc;
@@ -25,7 +25,7 @@ use crate::{
     error::{AddressOperation, BusyReason, LinkerError, StructureKind},
     failure::SnapshotError,
     model::{DebugRecord, ExtendedRecord, LinkMapRecord},
-    snapshot::{SnapshotLimits, model::Snapshot as ModuleSnapshot},
+    snapshot::{RetryPolicy, model::Snapshot as ModuleSnapshot},
 };
 
 mod dynamic;
@@ -74,7 +74,7 @@ where
         Coherent<Value = RawExtended<AbiType>, Context = (), Error = LinkerError>,
     GnuLinkMap<AbiType>: Coherent<Value = RawMap<AbiType>, Context = (), Error = LinkerError>,
 {
-    /// Capture one coherent GNU loader observation with the ABI profile defaults.
+    /// Capture one coherent GNU loader observation with the standard retry policy.
     ///
     /// # Errors
     ///
@@ -85,25 +85,28 @@ where
         target_process: &Process,
         target_snapshot: &Snapshot,
     ) -> Result<Self, SnapshotError<AbiType>> {
-        Self::bounded(target_process, target_snapshot, AbiType::DEFAULT_LIMITS)
+        Self::with_retry(target_process, target_snapshot, RetryPolicy::standard())
     }
 
-    /// Capture one coherent GNU loader observation under caller-selected finite bounds.
+    /// Capture one coherent GNU loader observation under a caller-selected retry policy.
+    ///
+    /// Target structure sizes and traversal lengths remain governed only by validated format and
+    /// protocol geometry. The policy controls repeated complete observations of mutable state.
     ///
     /// # Errors
     ///
-    /// Returns the same failure categories as [`Self::capture`] and reports policy exhaustion when
-    /// valid target structures exceed the selected finite bounds.
+    /// Returns the same failure categories as [`Self::capture`] when the selected attempt count is
+    /// exhausted before a coherent observation is produced.
     #[inline]
-    pub fn bounded(
+    pub fn with_retry(
         target_process: &Process,
         target_snapshot: &Snapshot,
-        target_limits: SnapshotLimits,
+        target_retry: RetryPolicy,
     ) -> Result<Self, SnapshotError<AbiType>> {
-        let target = Target::new(target_process, target_snapshot, target_limits);
+        let target = Target::new(target_process, target_snapshot);
         let attempt = Attempt::new(target);
 
-        Retry::new(target_limits.attempts()).run(|| attempt.run::<AbiType>())
+        Retry::new(target_retry.attempts()).run(|| attempt.run::<AbiType>())
     }
 
     /// Capture one coherent GNU loader observation from a process-bound matching ELF image.
@@ -115,43 +118,66 @@ where
     #[inline]
     pub fn prepared(
         target_observation: &ElfObservation<'_, AbiType::Elf>,
-        target_limits: SnapshotLimits,
     ) -> Result<Self, SnapshotError<AbiType>> {
-        let target = Target::new(
-            target_observation.process(),
-            target_observation.snapshot(),
-            target_limits,
-        );
+        Self::prepared_with_retry(target_observation, RetryPolicy::standard())
+    }
+
+    /// Capture one prepared observation under a caller-selected retry policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same failures as [`Self::prepared`] when the selected attempt count is exhausted.
+    #[inline]
+    pub fn prepared_with_retry(
+        target_observation: &ElfObservation<'_, AbiType::Elf>,
+        target_retry: RetryPolicy,
+    ) -> Result<Self, SnapshotError<AbiType>> {
+        let target = Target::new(target_observation.process(), target_observation.snapshot());
         let attempt = Attempt::new(target);
         let image = target_observation.image();
 
-        Retry::new(target_limits.attempts()).run(|| attempt.finish::<AbiType>(image))
+        Retry::new(target_retry.attempts()).run(|| attempt.finish::<AbiType>(image))
     }
 }
 
-/// Capability for repeated coherent lifts from one attached process.
+/// Capability for repeated coherent lifts from one process observation.
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): Every lift uses the same process handle retained for this complete acquisition attempt.
-pub struct Stable<'target>(
+// NOTE(invariant): Every lift uses the same process handle and every structural memory bound uses the same kernel snapshot retained for this complete acquisition attempt.
+pub struct Stable<'target> {
     /// Process used for all stable foreign observations.
-    &'target Process,
-);
+    process: &'target Process,
+
+    /// Kernel mapping snapshot used for structural memory bounds.
+    snapshot: &'target Snapshot,
+}
 
 impl<'target> Stable<'target> {
-    /// Bind all later stable lifts to one process handle.
+    /// Bind all later stable lifts and memory bounds to one process observation.
     #[inline]
     #[must_use]
-    pub const fn new(target_process: &'target Process) -> Self {
-        Self(target_process)
+    pub const fn new(target_process: &'target Process, target_snapshot: &'target Snapshot) -> Self {
+        Self {
+            process: target_process,
+            snapshot: target_snapshot,
+        }
     }
 
     /// Return the exact process handle carried by this stability capability.
     #[inline]
     #[must_use]
     pub const fn process(self) -> &'target Process {
-        let Self(process) = self;
+        let Self { process, .. } = self;
 
         process
+    }
+
+    /// Return the exact kernel snapshot carried by this stability capability.
+    #[inline]
+    #[must_use]
+    pub const fn snapshot(self) -> &'target Snapshot {
+        let Self { snapshot, .. } = self;
+
+        snapshot
     }
 
     /// Stabilize and lift one typed foreign structure under the configured repetition bound.
@@ -167,7 +193,7 @@ impl<'target> Stable<'target> {
         LiftedType: Coherent<Value = ForeignType, Error = LinkerError>,
         LiftedType::Context: Default,
     {
-        let Self(process) = self;
+        let Self { process, .. } = self;
         let foreign =
             Process::open::<ForeignType>(process, target_address).map_err(|target_error| {
                 match target_error {
@@ -198,7 +224,7 @@ impl<'target> Stable<'target> {
 
 /// Fixed target used for one all-or-nothing coherent acquisition attempt.
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): `target` fixes one process observation and one finite policy for every operation in this attempt.
+// NOTE(invariant): `target` fixes one process observation for every operation in this attempt.
 struct Attempt<'target>(
     /// Selected process observation.
     Target<'target>,
@@ -225,14 +251,8 @@ impl<'target> Attempt<'target> {
         let Self(target) = self;
         let process = target.process();
         let snapshot = target.snapshot();
-        let limits = target.limits();
-        let image = ElfProcessImage::<AbiType::Elf>::read(
-            process,
-            snapshot,
-            limits.phdrs(),
-            limits.interpreter(),
-        )
-        .map_err(SnapshotError::ElfImage)?;
+        let image = ElfProcessImage::<AbiType::Elf>::read(process, snapshot)
+            .map_err(SnapshotError::ElfImage)?;
 
         self.finish::<AbiType>(&image)
     }
@@ -253,15 +273,14 @@ impl<'target> Attempt<'target> {
     {
         let Self(target) = self;
         let process = target.process();
-        let limits = target.limits();
-        let stable = Stable::new(process);
+        let snapshot = target.snapshot();
+        let stable = Stable::new(process, snapshot);
         let interpreter =
             Interpreter::new(image.interpreter().clone(), AbiType::INTERPRETER_BASENAME)
                 .map_err(SnapshotError::UnsupportedInterpreter)?;
         let dynamic = image.dynamic();
-        let debug =
-            Table::<AbiType>::new(process, dynamic.address(), dynamic.size(), limits)?.debug()?;
-        let namespaces = Namespaces::new(stable, limits)
+        let debug = Table::<AbiType>::new(process, dynamic.address(), dynamic.size())?.debug()?;
+        let namespaces = Namespaces::new(stable)
             .read::<AbiType>(debug)?
             .into_boxed_slice();
         let main_load_bias = *image.load_bias();

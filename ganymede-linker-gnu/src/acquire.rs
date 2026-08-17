@@ -9,35 +9,25 @@ use alloc::{boxed::Box, vec::Vec};
 use ganymede_process::process::{Process, Snapshot};
 use ganymede_text::BytePath;
 
-use crate::snapshot::SnapshotLimits;
-
 /// Process observation context shared by one complete GNU snapshot attempt.
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): `process` and `snapshot` are caller-provided views of the same selected target and `limits` remains fixed for the complete attempt.
+// NOTE(invariant): `process` and `snapshot` are caller-provided views of the same selected target for the complete attempt.
 pub struct Target<'target> {
     /// Attached process used for foreign reads.
     process: &'target Process,
 
     /// Kernel process snapshot used for process metadata.
     snapshot: &'target Snapshot,
-
-    /// Finite policy fixed for this attempt.
-    limits: SnapshotLimits,
 }
 
 impl<'target> Target<'target> {
-    /// Bind one target observation to one finite policy.
+    /// Bind one process handle and kernel snapshot to a complete acquisition attempt.
     #[inline]
     #[must_use]
-    pub const fn new(
-        target_process: &'target Process,
-        target_snapshot: &'target Snapshot,
-        target_limits: SnapshotLimits,
-    ) -> Self {
+    pub const fn new(target_process: &'target Process, target_snapshot: &'target Snapshot) -> Self {
         Self {
             process: target_process,
             snapshot: target_snapshot,
-            limits: target_limits,
         }
     }
 
@@ -57,15 +47,6 @@ impl<'target> Target<'target> {
         let Self { snapshot, .. } = self;
 
         snapshot
-    }
-
-    /// Return the finite policy.
-    #[inline]
-    #[must_use]
-    pub const fn limits(&self) -> SnapshotLimits {
-        let Self { limits, .. } = self;
-
-        *limits
     }
 }
 

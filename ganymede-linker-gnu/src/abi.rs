@@ -1,7 +1,7 @@
 //! Compile-time GNU runtime-linker ABI families.
 //!
 //! One sealed family selects the matching ELF class, foreign pointer encoding, generated GNU
-//! records, linker state, interpreter profile, and default finite policy. Generated field projection
+//! records, linker state, and interpreter profile. Generated field projection
 //! remains specialized at this boundary while protocol algorithms operate over one `AbiType`.
 
 use core::fmt;
@@ -16,7 +16,6 @@ use crate::{
     binding32, binding64,
     error::LinkerError,
     model::{DebugRecord, ExtendedRecord, LinkMapRecord},
-    snapshot::SnapshotLimits,
 };
 
 mod detail {
@@ -64,9 +63,6 @@ pub trait Abi: detail::Abi + Copy + fmt::Debug + Eq + 'static {
 
     /// Generated loader state that proves a stable link map.
     const CONSISTENT: Self::State;
-
-    /// Default finite acquisition policy for this ABI profile.
-    const DEFAULT_LIMITS: SnapshotLimits;
 }
 
 impl Abi for Gnu32 {
@@ -78,7 +74,6 @@ impl Abi for Gnu32 {
 
     const INTERPRETER_BASENAME: &'static [u8] = b"ld-linux.so.2";
     const CONSISTENT: Self::State = binding32::r_debug_32_RT_CONSISTENT;
-    const DEFAULT_LIMITS: SnapshotLimits = SnapshotLimits::i386();
 }
 
 impl Abi for Gnu64 {
@@ -90,7 +85,6 @@ impl Abi for Gnu64 {
 
     const INTERPRETER_BASENAME: &'static [u8] = b"ld-linux-x86-64.so.2";
     const CONSISTENT: Self::State = binding64::r_debug_64_RT_CONSISTENT;
-    const DEFAULT_LIMITS: SnapshotLimits = SnapshotLimits::amd64();
 }
 
 /// Target ELF address width selected by one GNU ABI family.

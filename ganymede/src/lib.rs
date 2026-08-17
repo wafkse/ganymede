@@ -20,12 +20,12 @@ pub mod prelude {
     //! Convenience imports for end-to-end process and loader inspection.
     //!
     //! The prelude keeps the process snapshot distinct from the runtime-linker snapshot while
-    //! exposing the finite GNU policy and normalized module collection used by the facade.
+    //! exposing the GNU retry policy and normalized module collection used by the facade.
 
     pub use crate::loader::{
         CaptureError, Inspection, InspectionError, Loader, Snapshot, UnsupportedLoader,
     };
-    pub use ganymede_linker_gnu::snapshot::SnapshotLimits;
+    pub use ganymede_linker_gnu::snapshot::RetryPolicy;
     pub use ganymede_module::{Module, Modules};
     pub use ganymede_process::process::{Process, ProcessId, Snapshot as ProcessSnapshot};
 }

@@ -24,6 +24,9 @@ mod detail {
     /// Prevent downstream program-header layouts from entering image validation.
     pub trait Program {}
 
+    /// Prevent downstream ELF-header layouts from entering image validation.
+    pub trait Header {}
+
     impl Class for super::Elf32 {}
     impl Class for super::Elf64 {}
 
@@ -32,6 +35,9 @@ mod detail {
 
     impl Program for super::binding::Elf32_Phdr {}
     impl Program for super::binding::Elf64_Phdr {}
+
+    impl Header for super::binding::Elf32_Ehdr {}
+    impl Header for super::binding::Elf64_Ehdr {}
 }
 
 /// ELF object class proven from process auxiliary metadata.
@@ -130,6 +136,10 @@ pub trait ProgramHeader: detail::Program + Unassociated + Copy + fmt::Debug {
     #[must_use]
     fn kind(&self) -> u32;
 
+    /// Return the `p_flags` segment permissions.
+    #[must_use]
+    fn flags(&self) -> u32;
+
     /// Return the segment virtual address in the selected ELF width.
     #[must_use]
     fn address(&self) -> Self::Word;
@@ -143,27 +153,131 @@ pub trait ProgramHeader: detail::Program + Unassociated + Copy + fmt::Debug {
     fn memory(&self) -> Self::Word;
 }
 
+/// Width-preserving access to the ELF header fields required for loaded-image notes.
+///
+/// The generated ELF32 and ELF64 headers have different physical layouts. This sealed contract
+/// exposes only identity and program-table geometry while retaining the selected class width.
+pub trait Header: detail::Header + Unassociated + Copy + fmt::Debug {
+    /// ELF word width carried by the program-table offset.
+    type Word: Word;
+
+    /// Return the exact ELF identification bytes.
+    #[must_use]
+    fn identity(&self) -> &[u8; binding::EI_NIDENT as usize];
+
+    /// Return the program-table byte offset from the image base.
+    #[must_use]
+    fn program_offset(&self) -> Self::Word;
+
+    /// Return the generated program-header entry size.
+    #[must_use]
+    fn program_size(&self) -> u16;
+
+    /// Return the program-header entry count.
+    #[must_use]
+    fn program_count(&self) -> u16;
+}
+
+impl Header for binding::Elf32_Ehdr {
+    type Word = u32;
+
+    #[inline]
+    fn identity(&self) -> &[u8; binding::EI_NIDENT as usize] {
+        let Self { e_ident, .. } = self;
+
+        e_ident
+    }
+
+    #[inline]
+    fn program_offset(&self) -> Self::Word {
+        let Self { e_phoff, .. } = self;
+
+        *e_phoff
+    }
+
+    #[inline]
+    fn program_size(&self) -> u16 {
+        let Self { e_phentsize, .. } = self;
+
+        *e_phentsize
+    }
+
+    #[inline]
+    fn program_count(&self) -> u16 {
+        let Self { e_phnum, .. } = self;
+
+        *e_phnum
+    }
+}
+
+impl Header for binding::Elf64_Ehdr {
+    type Word = u64;
+
+    #[inline]
+    fn identity(&self) -> &[u8; binding::EI_NIDENT as usize] {
+        let Self { e_ident, .. } = self;
+
+        e_ident
+    }
+
+    #[inline]
+    fn program_offset(&self) -> Self::Word {
+        let Self { e_phoff, .. } = self;
+
+        *e_phoff
+    }
+
+    #[inline]
+    fn program_size(&self) -> u16 {
+        let Self { e_phentsize, .. } = self;
+
+        *e_phentsize
+    }
+
+    #[inline]
+    fn program_count(&self) -> u16 {
+        let Self { e_phnum, .. } = self;
+
+        *e_phnum
+    }
+}
+
 impl ProgramHeader for binding::Elf32_Phdr {
     type Word = u32;
 
     #[inline]
     fn kind(&self) -> u32 {
-        self.p_type
+        let Self { p_type, .. } = self;
+
+        *p_type
+    }
+
+    #[inline]
+    fn flags(&self) -> u32 {
+        let Self { p_flags, .. } = self;
+
+        *p_flags
     }
 
     #[inline]
     fn address(&self) -> Self::Word {
-        self.p_vaddr
+        let Self { p_vaddr, .. } = self;
+
+        *p_vaddr
     }
 
     #[inline]
     fn file(&self) -> Self::Word {
-        self.p_filesz
+        let Self { p_filesz, .. } = self;
+
+        *p_filesz
     }
 
     #[inline]
     fn memory(&self) -> Self::Word {
-        self.p_memsz
+        let Self { p_memsz, .. } = self;
+
+        *p_memsz
     }
 }
 
@@ -172,22 +286,37 @@ impl ProgramHeader for binding::Elf64_Phdr {
 
     #[inline]
     fn kind(&self) -> u32 {
-        self.p_type
+        let Self { p_type, .. } = self;
+
+        *p_type
+    }
+
+    #[inline]
+    fn flags(&self) -> u32 {
+        let Self { p_flags, .. } = self;
+
+        *p_flags
     }
 
     #[inline]
     fn address(&self) -> Self::Word {
-        self.p_vaddr
+        let Self { p_vaddr, .. } = self;
+
+        *p_vaddr
     }
 
     #[inline]
     fn file(&self) -> Self::Word {
-        self.p_filesz
+        let Self { p_filesz, .. } = self;
+
+        *p_filesz
     }
 
     #[inline]
     fn memory(&self) -> Self::Word {
-        self.p_memsz
+        let Self { p_memsz, .. } = self;
+
+        *p_memsz
     }
 }
 
@@ -199,6 +328,9 @@ impl ProgramHeader for binding::Elf64_Phdr {
 pub trait Class: detail::Class + Copy + fmt::Debug + Eq + 'static {
     /// Address, size, dynamic-value, symbol-value, and GNU bloom width for this class.
     type Word: Word;
+
+    /// Generated process-resident ELF-header representation.
+    type Header: Header<Word = Self::Word>;
 
     /// Generated process-resident program-header representation.
     type ProgramHeader: ProgramHeader<Word = Self::Word>;
@@ -218,6 +350,7 @@ pub trait Class: detail::Class + Copy + fmt::Debug + Eq + 'static {
 
 impl Class for Elf32 {
     type Word = u32;
+    type Header = binding::Elf32_Ehdr;
     type ProgramHeader = binding::Elf32_Phdr;
     type Dynamic = binding::Elf32_Dyn;
     type Symbol = binding::Elf32_Sym;
@@ -228,6 +361,7 @@ impl Class for Elf32 {
 
 impl Class for Elf64 {
     type Word = u64;
+    type Header = binding::Elf64_Ehdr;
     type ProgramHeader = binding::Elf64_Phdr;
     type Dynamic = binding::Elf64_Dyn;
     type Symbol = binding::Elf64_Sym;

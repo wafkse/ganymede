@@ -27,11 +27,11 @@ where
     #[error("unsupported interpreter bytes {0:?}")]
     UnsupportedInterpreter(BytePath),
 
-    /// Dynamic segment size cannot form a bounded table of complete entries.
+    /// Dynamic segment size cannot form a nonempty table of complete entries.
     #[error("invalid dynamic segment size {0:?}")]
     InvalidDynamicSize(ElfAddress<AbiType>),
 
-    /// Dynamic table has no terminator within policy.
+    /// Complete dynamic segment has no `DT_NULL` terminator.
     #[error("dynamic table lacks DT_NULL")]
     MissingDynamicTerminator,
 
@@ -86,6 +86,10 @@ where
         #[source]
         source: LinkerError,
     },
+
+    /// A loader-provided name does not begin in readable mapped process memory.
+    #[error("GNU loader name at {0:?} is not readable in the retained process snapshot")]
+    UnreadableName(catalejo::address::ViAddr),
 
     /// Foreign process byte read failed.
     #[error(transparent)]

@@ -108,44 +108,42 @@ pub enum Snapshot {
 }
 
 impl Snapshot {
-    /// Capture a supported runtime-linker snapshot under the selected architecture defaults.
+    /// Capture a supported runtime-linker snapshot with the standard retry policy.
     ///
     /// # Errors
     ///
     /// This returns [`CaptureError`] when ELF class or image validation fails, the exact interpreter
-    /// is unsupported, or the selected GNU backend cannot produce a coherent bounded snapshot.
+    /// is unsupported, or the selected GNU backend cannot produce a coherent snapshot.
     #[inline]
     pub fn capture(
         target_process: &Process,
         target_snapshot: &ProcessSnapshot,
     ) -> Result<Self, CaptureError> {
-        let class = ElfClass::from_snapshot(target_snapshot)?;
-        let limits = match class {
-            ElfClass::Elf32 => snapshot::SnapshotLimits::i386(),
-            ElfClass::Elf64 => snapshot::SnapshotLimits::amd64(),
-        };
-
-        Self::read(target_process, target_snapshot, class, limits)
+        Self::with_retry(
+            target_process,
+            target_snapshot,
+            snapshot::RetryPolicy::standard(),
+        )
     }
 
-    /// Capture a supported runtime-linker snapshot under caller-selected finite bounds.
+    /// Capture a supported runtime-linker snapshot under a caller-selected retry policy.
     ///
-    /// One policy shape is shared because both GNU backends expose the same bounded resource
-    /// categories. Target-width identities remain inside the selected snapshot variant.
+    /// Target structure acceptance remains governed by format and protocol invariants. The supplied
+    /// policy controls only repeated complete observations of mutable runtime-linker state.
     ///
     /// # Errors
     ///
-    /// This returns the same failure categories as [`Self::capture`] and reports policy exhaustion
-    /// when valid target structures exceed the supplied finite bounds.
+    /// This returns the same failure categories as [`Self::capture`] when the selected retry count
+    /// is exhausted before a coherent observation is produced.
     #[inline]
-    pub fn bounded(
+    pub fn with_retry(
         target_process: &Process,
         target_snapshot: &ProcessSnapshot,
-        target_limits: snapshot::SnapshotLimits,
+        target_retry: snapshot::RetryPolicy,
     ) -> Result<Self, CaptureError> {
         let class = ElfClass::from_snapshot(target_snapshot)?;
 
-        Self::read(target_process, target_snapshot, class, target_limits)
+        Self::read(target_process, target_snapshot, class, target_retry)
     }
 
     /// Return the runtime-linker profile represented by this snapshot.
@@ -163,32 +161,22 @@ impl Snapshot {
         target_process: &Process,
         target_snapshot: &ProcessSnapshot,
         target_class: ElfClass,
-        target_limits: snapshot::SnapshotLimits,
+        target_retry: snapshot::RetryPolicy,
     ) -> Result<Self, CaptureError> {
         match target_class {
             ElfClass::Elf32 => {
-                let observation = Elf32Observation::read(
-                    target_process,
-                    target_snapshot,
-                    target_limits.phdrs(),
-                    target_limits.interpreter(),
-                )?;
+                let observation = Elf32Observation::read(target_process, target_snapshot)?;
                 Loader::select(target_class, observation.image().interpreter())?;
 
-                snapshot32::ModuleSnapshot::prepared(&observation, target_limits)
+                snapshot32::ModuleSnapshot::prepared_with_retry(&observation, target_retry)
                     .map(Self::Gnu32)
                     .map_err(CaptureError::Gnu32)
             }
             ElfClass::Elf64 => {
-                let observation = Elf64Observation::read(
-                    target_process,
-                    target_snapshot,
-                    target_limits.phdrs(),
-                    target_limits.interpreter(),
-                )?;
+                let observation = Elf64Observation::read(target_process, target_snapshot)?;
                 Loader::select(target_class, observation.image().interpreter())?;
 
-                snapshot::ModuleSnapshot::prepared(&observation, target_limits)
+                snapshot::ModuleSnapshot::prepared_with_retry(&observation, target_retry)
                     .map(Self::Gnu64)
                     .map_err(CaptureError::Gnu64)
             }
@@ -232,19 +220,19 @@ impl Inspection {
         Self::finish(snapshot, target_snapshot)
     }
 
-    /// Capture loader state and normalize its modules under caller-selected finite bounds.
+    /// Capture loader state and normalize modules under a caller-selected retry policy.
     ///
     /// # Errors
     ///
-    /// This returns the same failure categories as [`Self::capture`] with the supplied bounds used
-    /// for ELF image and GNU graph acquisition.
+    /// This returns the same failure categories as [`Self::capture`] with the supplied policy used
+    /// only for repeated complete runtime-linker observations.
     #[inline]
-    pub fn bounded(
+    pub fn with_retry(
         target_process: &Process,
         target_snapshot: &ProcessSnapshot,
-        target_limits: snapshot::SnapshotLimits,
+        target_retry: snapshot::RetryPolicy,
     ) -> Result<Self, InspectionError> {
-        let snapshot = Snapshot::bounded(target_process, target_snapshot, target_limits)?;
+        let snapshot = Snapshot::with_retry(target_process, target_snapshot, target_retry)?;
 
         Self::finish(snapshot, target_snapshot)
     }

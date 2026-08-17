@@ -34,6 +34,10 @@ pub mod image;
 
 pub mod lift;
 
+pub mod loaded;
+
+pub mod note;
+
 pub mod process;
 
 pub mod symbol;
@@ -42,17 +46,20 @@ pub mod prelude {
     //! Convenience imports for ELF interpretation.
     //!
     //! The prelude exposes runtime class proof, compile-time class families, validated process
-    //! images, symbol semantics, and bounded dynamic lookup without erasing target-width identity.
+    //! images, symbol semantics, and structurally bounded dynamic lookup without erasing target-width identity.
 
     pub use crate::{
-        class::{Class, Elf32, Elf64, ElfClass, ElfClassError, ProgramHeader, Word},
+        class::{Class, Elf32, Elf64, ElfClass, ElfClassError, Header, ProgramHeader, Word},
         dynamic::{
             DynamicField, DynamicSymbols, DynamicSymbolsError, Elf32DynamicSymbols,
-            Elf32DynamicSymbolsError, Elf32SymbolLimits, Elf64DynamicSymbols,
-            Elf64DynamicSymbolsError, Elf64SymbolLimits, SymbolLimits,
+            Elf32DynamicSymbolsError, Elf64DynamicSymbols, Elf64DynamicSymbolsError,
         },
         image::{Elf32LoadBias, Elf64LoadBias, LoadBias},
         lift::{Dynamic, Elf32Dynamic, Elf64Dynamic, ElfError},
+        loaded::{
+            Elf32LoadedImage, Elf64LoadedImage, ExecutableSegment, LoadedImage, LoadedImageError,
+        },
+        note::{BuildIdError, GnuBuildId},
         process::{
             AddressOperation, DynamicSegment, Elf32DynamicSegment, Elf32Observation,
             Elf32ProcessImage, Elf32ProcessImageError, Elf64DynamicSegment, Elf64Observation,
