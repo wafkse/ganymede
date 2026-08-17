@@ -2,6 +2,9 @@
 name = "ganymede-pattern-core"
 version = "0.1.0"
 edition = "2024"
+description = "Core pattern representation, parsing, and scanning for Ganymede"
+license-file.workspace = true
+repository.workspace = true
 
 [dependencies]
 fearless_simd.workspace = true

@@ -73,7 +73,7 @@ The workspace is intentionally split by semantic responsibility rather than by o
 
 The workspace pins Rust with `rust-toolchain.toml`. Clippy and rustfmt are included in the pinned toolchain. The ELF binding build also requires Clang and libclang.
 
-Catalejo is currently consumed from its Git repository and pinned by `Cargo.lock` until a registry release is available.
+Catalejo is consumed from crates.io at version `0.1.0`.
 
 Run the same validation set used by CI from the workspace root.
 

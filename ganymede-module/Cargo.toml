@@ -2,6 +2,9 @@
 name = "ganymede-module"
 version = "0.1.0"
 edition = "2024"
+description = "Format-neutral loaded-module domain layer"
+license-file.workspace = true
+repository.workspace = true
 
 [dependencies]
 catalejo.workspace = true

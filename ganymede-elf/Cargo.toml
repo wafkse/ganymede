@@ -2,6 +2,9 @@
 name = "ganymede-elf"
 version = "0.1.0"
 edition = "2024"
+description = "ELF interpretation over format-neutral process memory"
+license-file.workspace = true
+repository.workspace = true
 build = "build.rs"
 
 [dependencies]

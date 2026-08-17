@@ -2,6 +2,9 @@
 name = "ganymede-pattern"
 version = "0.1.0"
 edition = "2024"
+description = "Pattern facade for compile-time and runtime binary scanning"
+license-file.workspace = true
+repository.workspace = true
 
 [dependencies]
 ganymede-pattern-core.workspace = true

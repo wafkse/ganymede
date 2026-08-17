@@ -2,6 +2,9 @@
 name = "ganymede-process"
 version = "0.1.0"
 edition = "2024"
+description = "Format-neutral process inspection over Catalejo-managed foreign memory"
+license-file.workspace = true
+repository.workspace = true
 
 [dependencies]
 bitflags.workspace = true

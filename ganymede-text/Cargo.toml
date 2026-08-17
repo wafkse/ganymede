@@ -2,3 +2,6 @@
 name = "ganymede-text"
 version = "0.1.0"
 edition = "2024"
+description = "Byte-preserving text and path types for process introspection"
+license-file.workspace = true
+repository.workspace = true

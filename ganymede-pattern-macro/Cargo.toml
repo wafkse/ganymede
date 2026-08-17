@@ -2,6 +2,9 @@
 name = "ganymede-pattern-macro"
 version = "0.1.0"
 edition = "2024"
+description = "Procedural macro support for Ganymede binary patterns"
+license-file.workspace = true
+repository.workspace = true
 
 [lib]
 proc-macro = true

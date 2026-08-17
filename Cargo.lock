@@ -92,7 +92,8 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 [[package]]
 name = "catalejo"
 version = "0.1.0"
-source = "git+https://github.com/wafkse/catalejo.git?branch=development#8786a8e1d5eaf4c0df5b7b01f9e30a7b3e48bc76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5dc070843668324c38863cb03eece9585a77bc38d11d0d8af2759a9044b395db"
 dependencies = [
  "bitflags",
  "catalejo-fault",
@@ -108,7 +109,8 @@ dependencies = [
 [[package]]
 name = "catalejo-fault"
 version = "0.1.0"
-source = "git+https://github.com/wafkse/catalejo.git?branch=development#8786a8e1d5eaf4c0df5b7b01f9e30a7b3e48bc76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1c5447afe206de806788482c1b25c20f59f4bbc4e4ce144f86a9cc5b5d91b46"
 dependencies = [
  "bindgen",
  "catalejo-memory",
@@ -120,7 +122,8 @@ dependencies = [
 [[package]]
 name = "catalejo-macro"
 version = "0.1.0"
-source = "git+https://github.com/wafkse/catalejo.git?branch=development#8786a8e1d5eaf4c0df5b7b01f9e30a7b3e48bc76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2f8f7fed35798ceb9d15771912af020d53e861c361f858e599b012684d8736d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -130,12 +133,14 @@ dependencies = [
 [[package]]
 name = "catalejo-memory"
 version = "0.1.0"
-source = "git+https://github.com/wafkse/catalejo.git?branch=development#8786a8e1d5eaf4c0df5b7b01f9e30a7b3e48bc76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c908b75e98c1cc1948657c100435a4a2cd6d48f4ee2e2f5e72e5a5e3c4062ab8"
 
 [[package]]
 name = "catalejo-sys"
 version = "0.1.0"
-source = "git+https://github.com/wafkse/catalejo.git?branch=development#8786a8e1d5eaf4c0df5b7b01f9e30a7b3e48bc76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d89194fe6ef28c5bee4f734b0e3e175e84e96c61e8c1a27b91c326e4bb67264"
 dependencies = [
  "bindgen",
  "cc",
