@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Ganymede
+        uses: actions/checkout@v4
+        with:
+          path: ganymede
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install --yes clang libclang-dev libc6-dev-i386
+
+      - name: Install pinned Rust toolchain
+        working-directory: ganymede
+        run: |
+          toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          rustup toolchain install "$toolchain" --profile minimal --component clippy --component rustfmt
+
+      - name: Check formatting
+        working-directory: ganymede
+        run: cargo fmt --all -- --check
+
+      - name: Check workspace
+        working-directory: ganymede
+        run: cargo check --locked --workspace --all-targets
+
+      - name: Run Clippy
+        working-directory: ganymede
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Audit const candidates
+        working-directory: ganymede
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::missing_const_for_fn
+
+      - name: Audit public inline coverage
+        working-directory: ganymede
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::missing_inline_in_public_items
+
+      - name: Run tests
+        working-directory: ganymede
+        run: cargo test --locked --workspace
+
+      - name: Build documentation
+        working-directory: ganymede
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --workspace --no-deps
+
+      - name: Check patch whitespace
+        working-directory: ganymede
+        run: git diff --check
