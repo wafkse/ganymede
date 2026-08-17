@@ -1,45 +1,81 @@
 # Ganymede
 
-Ganymede is a Linux process introspection toolkit built on [Catalejo].
+Ganymede is a Rust workspace for inspecting Linux processes, ELF images, GNU runtime linker state, loaded modules, and binary patterns.
 
-The workspace keeps process access, ELF interpretation, GNU runtime-linker state, normalized modules, byte-preserving text, and binary pattern scanning in separate crates. The `ganymede` facade composes those capabilities without erasing their lower-level types.
+It is built on [Catalejo] for process memory access. The workspace keeps each layer separate so process access, executable parsing, loader state, normalized module identity, byte-preserving text, and pattern scanning can evolve without collapsing into one shared representation.
 
-## Crates
+The project is currently focused on Linux ELF targets and GNU loaders on i386 and x86-64.
 
-- `ganymede-process` owns format-neutral process access and mapping snapshots.
-- `ganymede-text` preserves foreign path and text bytes without requiring UTF-8.
-- `ganymede-elf` validates ELF32 and ELF64 process images and dynamic metadata.
-- `ganymede-linker-gnu` captures coherent GNU i386 and x86-64 loader state.
-- `ganymede-module` normalizes loader observations into format-neutral modules.
-- `ganymede-pattern` provides fixed-width and Pelite-inspired executable scanning.
-- `ganymede` selects supported loaders and exposes end-to-end inspection.
+## What it provides
+
+- Process attachment, typed foreign reads, and mapping snapshots through `ganymede-process`
+- Byte-preserving text and path handling through `ganymede-text`
+- ELF32 and ELF64 process image validation through `ganymede-elf`
+- GNU runtime linker snapshot acquisition through `ganymede-linker-gnu`
+- Format-neutral loaded module normalization through `ganymede-module`
+- Fixed-width and Pelite-inspired executable pattern scanning through `ganymede-pattern`
+- End-to-end loader inspection through the `ganymede` facade
 
 ## Inspection
 
-The facade proves the ELF class and exact interpreter path before entering a runtime-linker backend. Unsupported interpreter families return typed errors rather than falling through to GNU interpretation.
+The facade inspects the target ELF class and interpreter before selecting a loader backend. Unsupported interpreter families return typed errors instead of being interpreted as GNU state.
 
 ```rust
 use ganymede::prelude::*;
 
-fn modules(process: &Process) -> Result<Modules, Box<dyn std::error::Error>> {
+fn modules(pid: u32) -> Result<Modules, Box<dyn std::error::Error>> {
+    let process = Process::new(ProcessId(pid))?;
     let process_snapshot = process.snapshot()?;
-    let inspection = Inspection::capture(process, &process_snapshot)?;
+    let inspection = Inspection::capture(&process, &process_snapshot)?;
 
     Ok(inspection.modules().clone())
 }
 ```
 
+`Inspection` keeps the validated loader snapshot and the normalized module view tied to the same process mapping snapshot used during capture.
+
 ## Pattern scanning
 
-`ganymede-pattern` keeps the fixed-width scanner as a direct search path and adds a flat executable atom program inspired by Pelite. Runtime parsing and the `program!` procedural macro lower to the same representation.
+`ganymede-pattern` exposes two scanning paths.
 
-Executable scanning keeps target pointer width and virtual base explicit. Its grammar supports exact bytes, wildcards, captures, fixed and ranged skips, followed relative and absolute pointers, alignment checks, integer reads, and alternatives.
+The fixed-width scanner is intended for direct byte and mask searches. The executable scanner uses a flat atom program inspired by Pelite and supports captures, variable skips, followed references, alignment checks, integer reads, alternatives, and explicit target pointer width.
+
+Runtime parsing and the `program!` procedural macro lower to the same executable representation.
+
+```rust
+use ganymede_pattern::prelude::*;
+
+let program = program!("48 8B [1-4] 90");
+let scanner = ProgramScanner::new(program, PointerWidth::U64);
+
+assert_eq!(scanner.find(&[0x48, 0x8b, 0x00, 0x90]), Some(0));
+```
+
+Executable scans operate on byte images. Candidate ranges limit where matches may begin, while followed references may resolve elsewhere inside the supplied image.
+
+## Workspace layout
+
+The workspace is intentionally split by semantic responsibility rather than by one common internal representation.
+
+| Crate | Responsibility |
+| --- | --- |
+| `ganymede` | End-to-end facade and loader selection |
+| `ganymede-process` | Process access and mapping snapshots |
+| `ganymede-text` | Byte-preserving text and paths |
+| `ganymede-elf` | ELF validation and dynamic metadata |
+| `ganymede-linker-gnu` | GNU runtime linker acquisition |
+| `ganymede-module` | Normalized loaded modules |
+| `ganymede-pattern-core` | Pattern representations, parsing, and scanning |
+| `ganymede-pattern-macro` | Compile-time pattern construction |
+| `ganymede-pattern` | Pattern facade |
 
 ## Development
 
-The workspace pins Rust through `rust-toolchain.toml`. Clippy and rustfmt are installed with that toolchain. Bindgen also requires Clang and libclang.
+The workspace pins Rust with `rust-toolchain.toml`. Clippy and rustfmt are included in the pinned toolchain. The ELF binding build also requires Clang and libclang.
 
-Run the release validation set from the workspace root.
+Catalejo is currently consumed from its Git repository and pinned by `Cargo.lock` until a registry release is available.
+
+Run the same validation set used by CI from the workspace root.
 
 ```sh
 cargo fmt --all -- --check
@@ -49,9 +85,12 @@ cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::missin
 cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::missing_inline_in_public_items
 cargo test --locked --workspace
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
-git diff --check
 ```
 
-Two integration tests require the Mirilla kernel module and remain environment dependent.
+Two integration tests depend on the Mirilla kernel module and are ignored when that environment is unavailable.
+
+## Project status
+
+Ganymede is under active development. Public APIs are being shaped around explicit format, address-width, snapshot, and loader invariants. Expect changes while the crate family approaches its first stable release.
 
 [Catalejo]: https://github.com/wafkse/catalejo
