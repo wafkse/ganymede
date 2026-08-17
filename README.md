@@ -2,27 +2,21 @@
 
 Ganymede is a Linux process introspection toolkit built on [Catalejo].
 
-The workspace keeps process access, executable formats, runtime-linker protocols, normalized module identity, byte-preserving text, and binary pattern scanning in separate crates. The `ganymede` facade composes the process-to-module path without erasing the lower-level types.
+The workspace keeps process access, ELF interpretation, GNU runtime-linker state, normalized modules, byte-preserving text, and binary pattern scanning in separate crates. The `ganymede` facade composes those capabilities without erasing their lower-level types.
 
 ## Crates
 
-- `ganymede-process` provides format-neutral process attachment, foreign reads, and kernel mapping snapshots.
-- `ganymede-text` preserves exact foreign path and text bytes without requiring UTF-8.
-- `ganymede-elf` validates ELF32 and ELF64 process images and resolves dynamic symbols.
-- `ganymede-linker-gnu` captures coherent GNU i386 and x86-64 runtime-linker state.
-- `ganymede-module` normalizes loader observations into format-neutral loaded modules.
-- `ganymede-pattern` provides runtime and compile-time binary pattern parsing and scanning.
-- `ganymede` selects a supported loader explicitly and composes coherent loader capture with module normalization.
+- `ganymede-process` owns format-neutral process access and mapping snapshots.
+- `ganymede-text` preserves foreign path and text bytes without requiring UTF-8.
+- `ganymede-elf` validates ELF32 and ELF64 process images and dynamic metadata.
+- `ganymede-linker-gnu` captures coherent GNU i386 and x86-64 loader state.
+- `ganymede-module` normalizes loader observations into format-neutral modules.
+- `ganymede-pattern` provides fixed-width and Pelite-inspired executable scanning.
+- `ganymede` selects supported loaders and exposes end-to-end inspection.
 
-## Loader selection
+## Inspection
 
-The facade proves the ELF class and reads the exact interpreter path before entering a runtime-linker backend. GNU i386 is selected only for `ld-linux.so.2`. GNU x86-64 is selected only for `ld-linux-x86-64.so.2`. Other ELF interpreters return a typed unsupported-loader error.
-
-This policy prevents an unknown ELF interpreter from silently falling through to GNU interpretation. Future runtime-linker crates can be added as sibling backends without placing a generic linker protocol into lower-level crates.
-
-## End-to-end inspection
-
-Given an already attached `Process`, the common path is
+The facade proves the ELF class and exact interpreter path before entering a runtime-linker backend. Unsupported interpreter families return typed errors rather than falling through to GNU interpretation.
 
 ```rust
 use ganymede::prelude::*;
@@ -35,8 +29,29 @@ fn modules(process: &Process) -> Result<Modules, Box<dyn std::error::Error>> {
 }
 ```
 
-`Inspection` retains a width-preserving GNU snapshot internally and normalizes modules against the same process mapping snapshot used during capture. Call `Inspection::snapshot` when architecture-specific GNU state is required and `Inspection::modules` for the format-neutral module view.
+## Pattern scanning
 
-Pattern scanning remains a separate dependency through `ganymede-pattern`. This keeps its procedural macro expansion and runtime scanner usable without making them dependencies of process or loader inspection.
+`ganymede-pattern` keeps the fixed-width scanner as a direct search path and adds a flat executable atom program inspired by Pelite. Runtime parsing and the `program!` procedural macro lower to the same representation.
+
+Executable scanning keeps target pointer width and virtual base explicit. Its grammar supports exact bytes, wildcards, captures, fixed and ranged skips, followed relative and absolute pointers, alignment checks, integer reads, and alternatives.
+
+## Development
+
+The workspace pins Rust through `rust-toolchain.toml`. Clippy and rustfmt are installed with that toolchain. Bindgen also requires Clang and libclang.
+
+Run the release validation set from the workspace root.
+
+```sh
+cargo fmt --all -- --check
+cargo check --locked --workspace --all-targets
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::missing_const_for_fn
+cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::missing_inline_in_public_items
+cargo test --locked --workspace
+RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
+git diff --check
+```
+
+Two integration tests require the Mirilla kernel module and remain environment dependent.
 
 [Catalejo]: https://github.com/wafkse/catalejo
