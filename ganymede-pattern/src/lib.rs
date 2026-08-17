@@ -1,8 +1,8 @@
-//! Public binary-pattern facade combining runtime scanning and compile-time construction.
+//! Public facade for unified binary pattern compilation and scanning.
 //!
-//! Core parsing, planning, fixed-width search, and flat executable scanning live in
-//! `ganymede-pattern-core`. The procedural macros use the matching core parsers, while this crate
-//! provides one downstream dependency and import path.
+//! One Pelite-style syntax lowers to a flat atom representation in `ganymede-pattern-core`.
+//! Fixed-width linear patterns receive a private optimized search projection while dynamic patterns
+//! execute through the same scanner and public API.
 #![deny(clippy::all, clippy::perf, clippy::nursery, clippy::pedantic)]
 #![forbid(clippy::unwrap_used, clippy::panic, rustdoc::all)]
 #![deny(missing_docs)]
@@ -14,25 +14,18 @@ pub use ganymede_pattern_core::*;
 pub mod export {
     //! Implementation re-exports used by generated pattern macro expressions.
     //!
-    //! Keeping these paths together prevents generated code from depending on the facade's ordinary
-    //! public re-export layout. The module remains public because expansion occurs in downstream
-    //! crates, but it is not a supported user-facing namespace.
+    //! Expansion occurs in downstream crates, so these names must remain publicly reachable even
+    //! though this namespace is not part of the supported user-facing API.
 
-    pub use ganymede_pattern_core::{
-        Pattern,
-        program::{Atom, Program},
-    };
-    pub use ganymede_pattern_macro::{pattern, program};
+    pub use ganymede_pattern_core::{Atom, Pattern};
+    pub use ganymede_pattern_macro::pattern;
 }
 
-pub use export::{pattern, program};
+pub use export::pattern;
 
 pub mod prelude {
-    //! Convenience imports for runtime and compile-time binary patterns.
-    //!
-    //! The facade prelude adds both procedural macros to the core fixed-width and executable pattern
-    //! concepts.
+    //! Convenience imports for runtime and compile-time binary pattern scanning.
 
-    pub use crate::{pattern, program};
+    pub use crate::pattern;
     pub use ganymede_pattern_core::prelude::*;
 }

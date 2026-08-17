@@ -3,7 +3,7 @@
 #![forbid(clippy::unwrap_used, clippy::panic, rustdoc::all)]
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use ganymede_pattern_core::{PatternBuf, scan::Scanner};
+use ganymede_pattern_core::{PatternBuf, PointerWidth, Scanner};
 use std::hint::black_box;
 
 /// One Criterion context while the pattern scanning benchmark suite is registered.
@@ -26,8 +26,8 @@ impl<'criterion> Suite<'criterion> {
 
         let cases = [
             ("literal", "48 8B 01 02 89 AB CD EF"),
-            ("anchor", "48 8B ?? ?? 89 ?? ?? EF"),
-            ("masked", "4? ?B ?? ?? 8? ?? ?D ?F"),
+            ("anchor", "48 8B ? ? 89 ? ? EF"),
+            ("masked", "4? ?B ? ? 8? ? ?D ?F"),
         ];
         let mut group = target_criterion.benchmark_group("scanner");
 
@@ -35,7 +35,7 @@ impl<'criterion> Suite<'criterion> {
 
         for (name, source) in cases {
             let pattern = PatternBuf::parse(source).expect("benchmark pattern should parse");
-            let scanner = Scanner::new(pattern.as_pattern());
+            let scanner = Scanner::new(pattern.as_pattern(), PointerWidth::U64);
 
             group.bench_function(name, |target_bencher| {
                 target_bencher.iter(|| scanner.find(black_box(&haystack)));

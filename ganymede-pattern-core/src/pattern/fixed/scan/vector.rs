@@ -7,7 +7,7 @@
 
 use fearless_simd::{Simd, prelude::*};
 
-use super::super::{Pattern, Probe};
+use super::super::{Fixed, Probe};
 
 /// Bound SIMD implementation for one dispatched scanner operation.
 ///
@@ -33,7 +33,7 @@ impl<SimdType: Simd> Vector<SimdType> {
     /// has the same width as `target_pattern`, which the scanner proves before calling it.
     #[inline]
     #[must_use]
-    pub fn verify(self, target_pattern: Pattern<'_>, target_candidate: &[u8]) -> bool {
+    pub fn verify(self, target_pattern: Fixed<'_>, target_candidate: &[u8]) -> bool {
         let Self(simd) = self;
         let bytes = target_pattern.bytes();
         let masks = target_pattern.masks();

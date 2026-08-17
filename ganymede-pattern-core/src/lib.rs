@@ -1,8 +1,8 @@
-//! Binary patterns compiled for fixed-width search and executable scanning.
+//! Unified binary pattern parsing, compilation, and scanning.
 //!
-//! This crate owns fixed-width pattern representation, flat executable pattern programs, their
-//! syntax, search planning, and byte-slice scanning. Architecture-specific vector selection is delegated to
-//! `fearless_simd` so this crate contains no raw SIMD intrinsics or unsafe SIMD dispatch.
+//! One Pelite-style language lowers to a flat atom stream. Patterns with fixed-width linear
+//! semantics carry a private derived search plan that uses substring search and SIMD verification.
+//! Dynamic patterns execute through the same public scanner with explicit target pointer width.
 #![deny(clippy::all, clippy::perf, clippy::nursery, clippy::pedantic)]
 #![forbid(clippy::unwrap_used, clippy::panic, rustdoc::all)]
 #![deny(missing_docs)]
@@ -10,24 +10,17 @@
 
 pub mod pattern;
 
-pub mod program;
-
-pub use pattern::{Pattern, PatternBuf, PatternError, scan, syntax};
-pub use program::scan::{Matches as ProgramMatches, Scanner as ProgramScanner};
+pub use pattern::{
+    Atom, Pattern, PatternBuf, PatternError, PointerWidth,
+    scan::{Matches, Scanner},
+    syntax::{ParseError, ParseErrorKind, parse},
+};
 
 pub mod prelude {
-    //! Convenience imports for fixed-width and executable binary pattern scanning.
-    //!
-    //! The prelude exposes both scanner families without exposing internal vector implementation
-    //! details.
+    //! Convenience imports for unified binary pattern construction and scanning.
 
     pub use crate::{
-        Pattern, PatternBuf, PatternError, ProgramMatches, ProgramScanner,
-        program::{
-            Atom, PointerWidth, Program, ProgramBuf, ProgramError,
-            syntax::{ParseError as ProgramParseError, ParseErrorKind as ProgramParseErrorKind},
-        },
-        scan::{Matches, Scanner},
-        syntax::{MaskedByte, ParseError, ParseErrorKind, Parser, Token, parse},
+        Atom, Matches, ParseError, ParseErrorKind, Pattern, PatternBuf, PatternError, PointerWidth,
+        Scanner, parse,
     };
 }

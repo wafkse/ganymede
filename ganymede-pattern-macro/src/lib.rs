@@ -1,24 +1,23 @@
-//! Compile-time construction of validated fixed-width and executable patterns.
+//! Compile-time construction for the unified binary pattern representation.
 //!
-//! Both procedural macros delegate syntax to `ganymede-pattern-core`. The fixed-width macro emits
-//! canonical byte and mask arrays. The executable macro emits the exact flat atom stream returned by
-//! the runtime executable parser. Generated expressions therefore require no runtime parsing.
+//! The procedural macro delegates complete parsing and fixed-projection compilation to
+//! `ganymede-pattern-core`. Expansion emits the same atom representation produced at runtime and
+//! includes derived fixed byte and mask arrays only when the pattern is statically linear.
 #![deny(clippy::all, clippy::perf, clippy::nursery, clippy::pedantic)]
 #![forbid(clippy::unwrap_used, clippy::panic, rustdoc::all)]
 #![deny(missing_docs)]
 #![deny(clippy::missing_docs_in_private_items)]
 
-use ganymede_pattern_core::program::Atom;
+use ganymede_pattern_core::{Atom, PatternBuf};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::LitStr;
 
 /// Compile one string literal into a static `ganymede_pattern::Pattern`.
 ///
-/// Expansion accepts exactly the syntax implemented by
-/// [`ganymede_pattern_core::syntax::parse`]. Invalid syntax becomes a compiler error at the literal
-/// span. Successful expansion performs no runtime parsing and allocates no pattern representation at
-/// runtime.
+/// Expansion accepts the unified Pelite-style syntax implemented by
+/// [`ganymede_pattern_core::PatternBuf::parse`]. Invalid syntax becomes a compiler error at the
+/// literal span. Successful expansion performs no runtime parsing or allocation.
 #[proc_macro]
 #[inline]
 pub fn pattern(target_input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -31,91 +30,41 @@ pub fn pattern(target_input: proc_macro::TokenStream) -> proc_macro::TokenStream
     .into()
 }
 
-/// Compile one string literal into a static executable `ganymede_pattern::Program`.
-///
-/// Expansion accepts exactly the syntax implemented by
-/// [`ganymede_pattern_core::program::syntax::parse`]. The emitted flat atom stream is the same
-/// representation consumed by runtime executable scanning.
-#[proc_macro]
-#[inline]
-pub fn program(target_input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let target_literal = syn::parse_macro_input!(target_input as LitStr);
-
-    match ProgramExpansion::new(&target_literal).render() {
-        Ok(target_tokens) => target_tokens,
-        Err(target_error) => target_error.into_compile_error(),
-    }
-    .into()
-}
-
-/// Borrowed fixed-pattern macro input and its code-generation operation.
+/// Borrowed pattern macro input and its code-generation operation.
 struct PatternExpansion<'literal>(&'literal LitStr);
 
 impl<'literal> PatternExpansion<'literal> {
-    /// Bind one parsed Rust string literal to a fixed-pattern expansion.
+    /// Bind one parsed Rust string literal to a pattern expansion.
     #[inline]
     const fn new(target_literal: &'literal LitStr) -> Self {
         Self(target_literal)
     }
 
-    /// Parse fixed-width syntax and emit the canonical static representation.
+    /// Parse unified syntax and emit atoms plus any derived fixed projection.
     fn render(self) -> syn::Result<TokenStream> {
         let Self(target_literal) = self;
         let source = target_literal.value();
-        let (bytes, masks) =
-            ganymede_pattern_core::syntax::parse(&source).map_err(|target_error| {
-                syn::Error::new(
-                    target_literal.span(),
-                    format!("invalid binary pattern {target_error}"),
-                )
-            })?;
+        let pattern = PatternBuf::parse(&source).map_err(|target_error| {
+            syn::Error::new(
+                target_literal.span(),
+                format!("invalid binary pattern {target_error}"),
+            )
+        })?;
+        let atoms = pattern.atoms().iter().copied().map(Self::atom);
+        let (fixed_bytes, fixed_masks) = pattern.fixed_parts().unwrap_or((&[], &[]));
 
         Ok(quote! {{
-            const __GANYMEDE_PATTERN_BYTES: &[u8] = &[#(#bytes),*];
-            const __GANYMEDE_PATTERN_MASKS: &[u8] = &[#(#masks),*];
+            const __GANYMEDE_PATTERN_ATOMS: &[::ganymede_pattern::export::Atom] = &[#(#atoms),*];
+            const __GANYMEDE_PATTERN_FIXED_BYTES: &[u8] = &[#(#fixed_bytes),*];
+            const __GANYMEDE_PATTERN_FIXED_MASKS: &[u8] = &[#(#fixed_masks),*];
             const __GANYMEDE_PATTERN: ::ganymede_pattern::export::Pattern<'static> =
                 ::ganymede_pattern::export::Pattern::from_static_parts(
-                    __GANYMEDE_PATTERN_BYTES,
-                    __GANYMEDE_PATTERN_MASKS,
+                    __GANYMEDE_PATTERN_ATOMS,
+                    __GANYMEDE_PATTERN_FIXED_BYTES,
+                    __GANYMEDE_PATTERN_FIXED_MASKS,
                 );
 
             __GANYMEDE_PATTERN
-        }})
-    }
-}
-
-/// Borrowed executable-pattern macro input and its code-generation operation.
-struct ProgramExpansion<'literal>(&'literal LitStr);
-
-impl<'literal> ProgramExpansion<'literal> {
-    /// Bind one parsed Rust string literal to an executable-pattern expansion.
-    #[inline]
-    const fn new(target_literal: &'literal LitStr) -> Self {
-        Self(target_literal)
-    }
-
-    /// Parse executable syntax and emit the exact flat atom representation.
-    fn render(self) -> syn::Result<TokenStream> {
-        let Self(target_literal) = self;
-        let source = target_literal.value();
-        let atoms =
-            ganymede_pattern_core::program::syntax::parse(&source).map_err(|target_error| {
-                syn::Error::new(
-                    target_literal.span(),
-                    format!("invalid executable pattern {target_error}"),
-                )
-            })?;
-        let atoms = atoms.into_iter().map(Self::atom);
-
-        Ok(quote! {{
-            const __GANYMEDE_PROGRAM_ATOMS: &[::ganymede_pattern::export::Atom] =
-                &[#(#atoms),*];
-            const __GANYMEDE_PROGRAM: ::ganymede_pattern::export::Program<'static> =
-                ::ganymede_pattern::export::Program::from_static_atoms(
-                    __GANYMEDE_PROGRAM_ATOMS,
-                );
-
-            __GANYMEDE_PROGRAM
         }})
     }
 

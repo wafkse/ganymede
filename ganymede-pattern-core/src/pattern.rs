@@ -1,53 +1,158 @@
-//! Validated fixed-width patterns and their compiled search representation.
+//! Unified compiled binary patterns with Pelite-style semantics and fixed-width optimization.
 //!
-//! A pattern is represented by parallel byte and mask slices. Construction proves that the slices
-//! have equal nonzero width, then derives a search plan from those exact values. Callers can borrow
-//! the representation through [`Pattern`] or retain owned storage through [`PatternBuf`].
-//!
-//! Syntax parsing and scanning are separate public capabilities. They consume the same validated
-//! representation, which keeps textual syntax policy out of the hot matching path.
+//! Every pattern owns one flat atom stream. Patterns with linear fixed-width semantics also carry a
+//! derived private byte and mask projection used by the optimized search engine. Dynamic control
+//! flow remains interpreted directly from the same atom stream.
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::str::FromStr;
 
-mod plan;
+mod fixed;
 
 pub mod scan;
-
 pub mod syntax;
 
-use plan::SearchPlan;
+use fixed::{Fixed, FixedBuf};
 
-/// One masked byte selected to reject unlikely candidate positions quickly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// NOTE(invariant): `mask` is nonzero and `offset` lies within the pattern that produced this probe.
-struct Probe {
-    /// Byte offset from a candidate pattern start.
-    offset: usize,
+/// Pointer width used when an executable pattern follows an absolute pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PointerWidth {
+    /// Four-byte little-endian pointer used by 32-bit targets.
+    U32,
 
-    /// Pattern byte with unconstrained bits cleared.
-    value: u8,
-
-    /// Bits that participate in candidate comparison.
-    mask: u8,
+    /// Eight-byte little-endian pointer used by 64-bit targets.
+    U64,
 }
 
-/// Failure while constructing a fixed-width pattern from byte and mask arrays.
+impl PointerWidth {
+    /// Return the encoded pointer width in bytes.
+    #[inline]
+    #[must_use]
+    pub const fn bytes(self) -> usize {
+        match self {
+            Self::U32 => 4,
+            Self::U64 => 8,
+        }
+    }
+}
+
+/// One instruction in a flat executable binary pattern.
+///
+/// The control model follows Pelite. `Push` and `Pop` execute a followed subpattern and restore its
+/// caller cursor. `Many` retries the remaining pattern at increasing byte offsets. `Case` and
+/// `Break` encode alternatives with relative atom offsets. Ganymede omits Pelite's PE and MSVC
+/// specific type-name operation because this crate owns format-neutral byte-image scanning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Atom {
+    /// Match one exact byte using the active fuzzy mask.
+    Byte(u8),
+
+    /// Save the current virtual cursor in one capture slot when present.
+    Save(u8),
+
+    /// Execute the following atoms recursively, then restore the caller cursor after advancing it.
+    ///
+    /// A zero argument advances by the selected target pointer width.
+    Push(usize),
+
+    /// Return successfully from one pushed subpattern.
+    Pop,
+
+    /// Apply one bit mask to the next byte comparison.
+    Fuzzy(u8),
+
+    /// Advance the cursor by the supplied byte count.
+    ///
+    /// A zero argument advances by the selected target pointer width.
+    Skip(usize),
+
+    /// Rewind the cursor by the supplied byte count.
+    ///
+    /// A zero argument rewinds by the selected target pointer width.
+    Back(usize),
+
+    /// Retry the remaining pattern non-greedily within the supplied forward byte extent.
+    ///
+    /// A zero argument searches through the remaining byte image.
+    Many(usize),
+
+    /// Follow one signed eight-bit displacement relative to the next byte.
+    Jump1,
+
+    /// Follow one signed little-endian 32-bit displacement relative to the next dword.
+    Jump4,
+
+    /// Follow one target-width little-endian absolute pointer.
+    Pointer,
+
+    /// Add one signed 32-bit displacement to a saved virtual cursor and follow the result.
+    Pir(u8),
+
+    /// Require the current virtual cursor to equal one available saved value.
+    Check(u8),
+
+    /// Require the current virtual cursor to be aligned to `1 << exponent`.
+    Aligned(u8),
+
+    /// Read and sign-extend one byte into a capture slot.
+    ReadI8(u8),
+
+    /// Read and zero-extend one byte into a capture slot.
+    ReadU8(u8),
+
+    /// Read and sign-extend one little-endian word into a capture slot.
+    ReadI16(u8),
+
+    /// Read and zero-extend one little-endian word into a capture slot.
+    ReadU16(u8),
+
+    /// Read and sign-extend one little-endian dword into a capture slot.
+    ReadI32(u8),
+
+    /// Read one little-endian unsigned dword into a capture slot.
+    ReadU32(u8),
+
+    /// Store zero in one capture slot when present.
+    Zero(u8),
+
+    /// Retry an alternative after skipping the supplied number of atoms when the current branch fails.
+    Case(usize),
+
+    /// Finish the current alternative successfully and skip the supplied number of atoms.
+    Break(usize),
+
+    /// Perform no cursor or capture operation.
+    Nop,
+}
+
+impl Atom {
+    /// Return the capture slot referenced by this atom when one exists.
+    #[inline]
+    #[must_use]
+    pub const fn slot(self) -> Option<u8> {
+        match self {
+            Self::Save(slot)
+            | Self::Pir(slot)
+            | Self::Check(slot)
+            | Self::ReadI8(slot)
+            | Self::ReadU8(slot)
+            | Self::ReadI16(slot)
+            | Self::ReadU16(slot)
+            | Self::ReadI32(slot)
+            | Self::ReadU32(slot)
+            | Self::Zero(slot) => Some(slot),
+            _ => None,
+        }
+    }
+}
+
+/// Failure while constructing a compiled binary pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatternError {
-    /// A zero-width pattern would match without consuming any byte.
+    /// A pattern must contain at least one atom.
     Empty,
-
-    /// Pattern bytes and masks must describe the same number of positions.
-    Length {
-        /// Number of supplied pattern bytes.
-        bytes: usize,
-
-        /// Number of supplied pattern masks.
-        masks: usize,
-    },
 }
 
 impl core::fmt::Display for PatternError {
@@ -55,241 +160,236 @@ impl core::fmt::Display for PatternError {
     fn fmt(&self, target_formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Empty => target_formatter.write_str("pattern is empty"),
-            Self::Length { bytes, masks } => write!(
-                target_formatter,
-                "pattern byte count {bytes} does not match mask count {masks}"
-            ),
         }
     }
 }
 
 impl core::error::Error for PatternError {}
 
-/// Borrowed fixed-width pattern whose search plan is already compiled.
-///
-/// The value is cheap to copy because it borrows both representation slices. The stored plan is
-/// derived once during construction and remains coherent with those slices for the complete borrow.
-/// Matching never reparses syntax or reallocates pattern storage.
+/// Borrowed compiled binary pattern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// NOTE(invariant): `bytes` and `masks` are nonempty and equal in length, and `plan` was derived from those exact slices.
+// NOTE(invariant): `atoms` is nonempty, `save_len` exactly covers every referenced capture slot, and `fixed` when present is derived from those same atoms.
 pub struct Pattern<'pattern> {
-    /// Pattern byte values.
-    bytes: &'pattern [u8],
+    /// Flat executable atom stream.
+    atoms: &'pattern [Atom],
 
-    /// Bit masks selecting constrained bits in each pattern byte.
-    masks: &'pattern [u8],
+    /// Capture extent derived from the complete atom stream.
+    save_len: usize,
 
-    /// Candidate-discovery strategy derived once during construction.
-    plan: SearchPlan,
+    /// Optional fixed-width projection derived from the same atoms.
+    fixed: Option<Fixed<'pattern>>,
 }
 
 impl<'pattern> Pattern<'pattern> {
-    /// Validate borrowed representation slices and compile their search plan.
+    /// Validate one borrowed atom stream and derive its capture extent.
     ///
-    /// `target_masks` selects which bits of each corresponding byte are significant. Successful
-    /// construction therefore proves that every pattern position has one value and one mask.
+    /// Control-flow offsets are checked during execution. Invalid offsets reject that execution
+    /// branch rather than making the borrowed representation unsafe.
     ///
     /// # Errors
     ///
-    /// Returns [`PatternError::Empty`] when no progressing match can be formed. Returns
-    /// [`PatternError::Length`] when positional byte and mask data cannot be paired exactly.
+    /// This rejects an empty atom stream.
     #[inline]
-    pub const fn from_parts(
-        target_bytes: &'pattern [u8],
-        target_masks: &'pattern [u8],
-    ) -> Result<Self, PatternError> {
-        let nonempty = !target_bytes.is_empty();
-        let same_length = target_bytes.len() == target_masks.len();
-
-        match (nonempty, same_length) {
-            (false, _) => Err(PatternError::Empty),
-            (true, false) => Err(PatternError::Length {
-                bytes: target_bytes.len(),
-                masks: target_masks.len(),
-            }),
-            (true, true) => {
-                let plan = SearchPlan::compile(target_bytes, target_masks);
-
-                Ok(Self {
-                    bytes: target_bytes,
-                    masks: target_masks,
-                    plan,
-                })
-            }
+    pub const fn from_atoms(target_atoms: &'pattern [Atom]) -> Result<Self, PatternError> {
+        if target_atoms.is_empty() {
+            return Err(PatternError::Empty);
         }
+
+        let save_len = Self::capture_len(target_atoms);
+
+        Ok(Self {
+            atoms: target_atoms,
+            save_len,
+            fixed: None,
+        })
     }
 
-    /// Construct a statically emitted pattern after asserting representation invariants.
+    /// Construct a statically emitted pattern and optional fixed projection.
     ///
-    /// This entry point exists for the companion procedural macro so const pattern expressions do
-    /// not depend on const support for `Result::expect`.
+    /// This entry point exists for the companion procedural macro. Empty fixed slices select the
+    /// interpreter path. Nonempty fixed slices must have equal lengths.
     #[doc(hidden)]
     #[inline]
     #[must_use]
     pub const fn from_static_parts(
-        target_bytes: &'pattern [u8],
-        target_masks: &'pattern [u8],
+        target_atoms: &'pattern [Atom],
+        target_fixed_bytes: &'pattern [u8],
+        target_fixed_masks: &'pattern [u8],
     ) -> Self {
-        assert!(!target_bytes.is_empty(), "static pattern must be nonempty");
+        assert!(!target_atoms.is_empty(), "static pattern must be nonempty");
         assert!(
-            target_bytes.len() == target_masks.len(),
-            "static pattern byte and mask lengths must match"
+            target_fixed_bytes.len() == target_fixed_masks.len(),
+            "static fixed pattern byte and mask lengths must match"
+        );
+        assert!(
+            target_fixed_bytes.is_empty()
+                || Fixed::valid_for(target_atoms, target_fixed_bytes, target_fixed_masks),
+            "static fixed pattern projection must match its atoms"
         );
 
-        let plan = SearchPlan::compile(target_bytes, target_masks);
+        let save_len = Self::capture_len(target_atoms);
+        let fixed = if target_fixed_bytes.is_empty() {
+            None
+        } else {
+            Some(Fixed::new(target_fixed_bytes, target_fixed_masks))
+        };
 
         Self {
-            bytes: target_bytes,
-            masks: target_masks,
-            plan,
+            atoms: target_atoms,
+            save_len,
+            fixed,
         }
     }
 
-    /// Return the fixed byte width consumed by one match.
+    /// Borrow the flat executable atom stream.
     #[inline]
     #[must_use]
-    pub const fn len(&self) -> usize {
-        let Self { bytes, .. } = self;
+    pub const fn atoms(&self) -> &'pattern [Atom] {
+        let Self { atoms, .. } = self;
 
-        bytes.len()
+        atoms
     }
 
-    /// Report whether this pattern consumes no bytes.
+    /// Return the complete capture-array width required by this pattern.
     #[inline]
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        false
+    pub const fn save_len(&self) -> usize {
+        let Self { save_len, .. } = self;
+
+        *save_len
     }
 
-    /// Borrow the pattern byte values.
+    /// Borrow the private fixed projection when this pattern can use the optimized engine.
     #[inline]
-    #[must_use]
-    pub const fn bytes(&self) -> &'pattern [u8] {
-        let Self { bytes, .. } = self;
+    const fn fixed(&self) -> Option<Fixed<'pattern>> {
+        let Self { fixed, .. } = self;
 
-        bytes
+        *fixed
     }
 
-    /// Borrow the per-byte bit masks.
-    #[inline]
-    #[must_use]
-    pub const fn masks(&self) -> &'pattern [u8] {
-        let Self { masks, .. } = self;
+    /// Derive the capture extent from one atom stream.
+    const fn capture_len(target_atoms: &[Atom]) -> usize {
+        let mut index = 0usize;
+        let mut save_len = 0usize;
 
-        masks
-    }
+        while index < target_atoms.len() {
+            if let Some(slot) = target_atoms[index].slot() {
+                let required = slot as usize + 1;
 
-    /// Determine whether one same-width byte slice satisfies every constrained bit.
-    #[inline]
-    #[must_use]
-    pub fn matches(&self, target_bytes: &[u8]) -> bool {
-        let Self { bytes, masks, .. } = self;
-        let is_same_length = target_bytes.len() == bytes.len();
+                if required > save_len {
+                    save_len = required;
+                }
+            }
 
-        is_same_length
-            && bytes.iter().zip(masks.iter()).zip(target_bytes.iter()).all(
-                |((&pattern_byte, &mask), &target_byte)| ((target_byte ^ pattern_byte) & mask) == 0,
-            )
-    }
-
-    /// Borrow the exact-byte region selected for substring candidate discovery.
-    ///
-    /// Literal plans return the complete pattern. Anchored plans return the exact run proven during
-    /// planning. Masked-probe and wildcard plans have no substring anchor.
-    #[inline]
-    fn anchor(&self) -> Option<&'pattern [u8]> {
-        let Self { bytes, plan, .. } = self;
-
-        match *plan {
-            SearchPlan::Literal => Some(bytes),
-            SearchPlan::Anchor { offset, length } => Some(
-                bytes
-                    .get(offset..offset + length)
-                    .expect("compiled anchor must remain within the pattern representation"),
-            ),
-            SearchPlan::Probes { .. } | SearchPlan::Wildcard => None,
+            index += 1;
         }
-    }
 
-    /// Return the compiled search strategy tied to this exact representation.
-    #[inline]
-    const fn plan(&self) -> SearchPlan {
-        let Self { plan, .. } = self;
-
-        *plan
+        save_len
     }
 }
 
-/// Owned fixed-width pattern for runtime construction and long-lived scanner reuse.
-///
-/// Ownership lets callers discard source syntax or temporary construction buffers while retaining
-/// the compiled plan. Borrowing through [`Self::as_pattern`] does not rebuild that plan.
+/// Owned executable pattern compiled from runtime syntax or atom construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// NOTE(invariant): Owned byte and mask arrays are nonempty and equal in length, and `plan` was derived after those arrays reached their final contents.
+// NOTE(invariant): `atoms` is nonempty, `save_len` is derived from those exact final atoms, and `fixed` when present is derived from the same final stream.
 pub struct PatternBuf {
-    /// Owned pattern byte values.
-    bytes: Vec<u8>,
+    /// Owned flat executable atom stream.
+    atoms: Box<[Atom]>,
 
-    /// Owned bit masks.
-    masks: Vec<u8>,
+    /// Capture extent derived from `atoms`.
+    save_len: usize,
 
-    /// Candidate-discovery strategy derived from the owned arrays.
-    plan: SearchPlan,
+    /// Owned fixed-width projection when the atoms are statically linear.
+    fixed: Option<FixedBuf>,
 }
 
 impl PatternBuf {
-    /// Take ownership of canonical representation arrays and compile one search plan.
-    ///
-    /// Inputs become owned vectors before validation. Their buffers are retained by the pattern, so
-    /// transferring existing vectors does not require a shrink-to-fit allocation before scanning.
+    /// Take ownership of an atom sequence and derive its capture extent.
     ///
     /// # Errors
     ///
-    /// Returns [`PatternError::Empty`] when the owned representation has no byte position. Returns
-    /// [`PatternError::Length`] when byte and mask positions cannot be paired exactly.
+    /// This rejects an empty atom sequence.
     #[inline]
-    pub fn from_parts(
-        target_bytes: impl Into<Vec<u8>>,
-        target_masks: impl Into<Vec<u8>>,
-    ) -> Result<Self, PatternError> {
-        let bytes = target_bytes.into();
-        let masks = target_masks.into();
-        let pattern = Pattern::from_parts(&bytes, &masks)?;
-        let plan = pattern.plan();
+    pub fn from_atoms(target_atoms: impl Into<Vec<Atom>>) -> Result<Self, PatternError> {
+        let atoms = target_atoms.into();
+        let pattern = Pattern::from_atoms(&atoms)?;
+        let save_len = pattern.save_len();
+        let fixed = FixedBuf::compile(&atoms);
+        let atoms = atoms.into_boxed_slice();
 
-        Ok(Self { bytes, masks, plan })
+        Ok(Self {
+            atoms,
+            save_len,
+            fixed,
+        })
     }
 
-    /// Parse syntax once and retain an owned compiled pattern.
-    ///
-    /// Parsing materializes canonical byte and mask arrays directly. Search planning then runs over
-    /// those arrays, so runtime parsing and direct construction converge on the same scanner
-    /// representation without retaining an intermediate syntax object.
+    /// Parse Pelite-style executable syntax into one owned flat pattern.
     ///
     /// # Errors
     ///
-    /// Returns the first [`syntax::ParseError`] produced while tokenizing or materializing the
-    /// source. No partially compiled pattern is returned on failure.
+    /// This returns the first located syntax failure without retaining partial parser state.
     #[inline]
     pub fn parse(target_pattern: &str) -> Result<Self, syntax::ParseError> {
-        let (bytes, masks) = syntax::parse(target_pattern)?;
+        let atoms = syntax::parse(target_pattern)?;
+        let save_len = Pattern::capture_len(&atoms);
+        let fixed = FixedBuf::compile(&atoms);
+        let atoms = atoms.into_boxed_slice();
 
-        let plan = SearchPlan::compile(&bytes, &masks);
-
-        Ok(Self { bytes, masks, plan })
+        Ok(Self {
+            atoms,
+            save_len,
+            fixed,
+        })
     }
 
-    /// Borrow this owned pattern without rebuilding its search strategy.
+    /// Borrow this owned pattern without reparsing or copying its atom stream.
     #[inline]
     #[must_use]
     pub const fn as_pattern(&self) -> Pattern<'_> {
-        let Self { bytes, masks, plan } = self;
+        let Self {
+            atoms,
+            save_len,
+            fixed,
+        } = self;
+        let fixed = match fixed {
+            Some(target_fixed) => Some(target_fixed.as_fixed()),
+            None => None,
+        };
 
         Pattern {
-            bytes: bytes.as_slice(),
-            masks: masks.as_slice(),
-            plan: *plan,
+            atoms,
+            save_len: *save_len,
+            fixed,
         }
+    }
+
+    /// Borrow the owned flat atom stream.
+    #[inline]
+    #[must_use]
+    pub fn atoms(&self) -> &[Atom] {
+        let Self { atoms, .. } = self;
+
+        atoms
+    }
+
+    /// Borrow derived fixed parts for companion procedural macro expansion.
+    #[doc(hidden)]
+    #[inline]
+    #[must_use]
+    pub fn fixed_parts(&self) -> Option<(&[u8], &[u8])> {
+        let Self { fixed, .. } = self;
+        let target_fixed = fixed.as_ref()?;
+
+        Some((target_fixed.bytes(), target_fixed.masks()))
+    }
+
+    /// Return the complete capture-array width required by this pattern.
+    #[inline]
+    #[must_use]
+    pub const fn save_len(&self) -> usize {
+        let Self { save_len, .. } = self;
+
+        *save_len
     }
 }
 
@@ -303,37 +403,36 @@ impl FromStr for PatternBuf {
 }
 
 pub mod prelude {
-    //! Convenience imports for validated pattern construction and scanning.
-    //!
-    //! This prelude composes the pattern representation with its scanner and syntax surfaces.
+    //! Convenience imports for executable pattern construction and scanning.
 
     pub use super::scan::{Matches, Scanner};
-    pub use super::syntax::{MaskedByte, ParseError, ParseErrorKind, Parser, Token, parse};
-    pub use super::{Pattern, PatternBuf, PatternError};
+    pub use super::syntax::{ParseError, ParseErrorKind, parse};
+    pub use super::{Atom, Pattern, PatternBuf, PatternError, PointerWidth};
 }
 
 #[cfg(test)]
 mod tests {
-    //! Regression coverage for fixed-width representation and plan-independent matching.
+    //! Representation tests cover empty rejection and capture-width derivation.
 
     use super::*;
 
     #[test]
-    fn masked_matching_accepts_nibble_wildcards() {
-        let bytes = [0x40, 0x0f, 0x00];
-        let masks = [0xf0, 0x0f, 0x00];
-        let pattern = Pattern::from_parts(&bytes, &masks).expect("test pattern should be valid");
+    fn pattern_derives_capture_extent_from_flat_atoms() {
+        assert_eq!(Pattern::from_atoms(&[]), Err(PatternError::Empty));
 
-        assert!(pattern.matches(&[0x4a, 0xbf, 0xff]));
-        assert!(!pattern.matches(&[0x5a, 0xbf, 0xff]));
+        let atoms = [Atom::Save(0), Atom::ReadU32(7), Atom::Byte(0x90)];
+        let pattern = Pattern::from_atoms(&atoms).expect("nonempty atom stream should be valid");
+
+        assert_eq!(pattern.save_len(), 8);
+        assert_eq!(pattern.atoms(), &atoms);
     }
 
     #[test]
-    fn pattern_rejects_empty_or_mismatched_arrays() {
-        assert_eq!(Pattern::from_parts(&[], &[]), Err(PatternError::Empty));
-        assert!(matches!(
-            Pattern::from_parts(&[1], &[]),
-            Err(PatternError::Length { .. })
-        ));
+    fn fixed_projection_is_derived_only_for_linear_patterns() {
+        let fixed = PatternBuf::parse("41 ? 4? [2] 42").expect("fixed pattern should parse");
+        let dynamic = PatternBuf::parse("41 [1-4] 42").expect("dynamic pattern should parse");
+
+        assert!(fixed.fixed_parts().is_some());
+        assert!(dynamic.fixed_parts().is_none());
     }
 }

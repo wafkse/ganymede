@@ -1,86 +1,222 @@
-//! Reusable scanners over validated fixed-width patterns.
+//! Pelite-style interpreter and candidate search for flat executable patterns.
 //!
-//! Construction preprocesses literal search anchors and records the available SIMD level once. A
-//! search then selects among literal substring search, anchored verification, masked probe filtering,
-//! and the unconstrained wildcard case without reparsing or reallocating the pattern.
-//!
-//! Match iteration advances one byte after each match start rather than one pattern width. This
-//! intentionally preserves overlapping matches.
+//! Execution uses a program counter over one borrowed atom stream. Recursive execution is confined
+//! to control atoms that require backtracking or cursor restoration. The interpreter keeps no heap
+//! owned branch stack. Candidate ranges constrain only match starts while followed references may
+//! inspect any address represented by the supplied byte image.
 
-use fearless_simd::{Level, Simd, dispatch, prelude::SimdBase};
-use memchr::memmem::Finder;
+use core::ops::Range;
 
-use super::{Pattern, Probe, SearchPlan};
+use memchr::{memchr, memmem};
 
-mod vector;
+use super::{Atom, Pattern, PointerWidth, fixed};
 
-use vector::Vector;
+/// Maximum exact prefix bytes retained on the stack for candidate filtering.
+const PREFIX_BYTES: usize = 16;
 
-/// Smallest native byte vector exposed by `fearless_simd`.
-const MINIMUM_VECTOR_BYTES: usize = 16;
-
-/// Preprocessed search context for repeated scans with one pattern.
-///
-/// Literal and anchored plans retain a `memmem` finder built from the exact borrowed anchor. The SIMD
-/// level is detected during construction and reused by every later search. Neither operation changes
-/// the semantic pattern or copies its byte representation.
-#[derive(Debug)]
-// NOTE(invariant): `finder` is present exactly for plans with an exact-byte anchor and was built from the same borrowed pattern retained here.
-pub struct Scanner<'pattern> {
-    /// Validated pattern being searched.
+/// One executable branch state.
+#[derive(Debug, Clone, Copy)]
+// NOTE(invariant): `pc` is either within `pattern.atoms()` or one checked position past it, and `cursor` is converted to a byte-image access only through checked helpers.
+struct Exec<'pattern> {
+    /// Validated executable program borrowed by this branch.
     pattern: Pattern<'pattern>,
 
-    /// Preprocessed substring finder for literal or anchored plans.
-    finder: Option<Finder<'pattern>>,
+    /// Current byte-image cursor.
+    cursor: usize,
 
-    /// SIMD feature level detected once for repeated scanning.
-    level: Level,
+    /// Next atom program counter.
+    pc: usize,
+}
+
+/// Reusable scanner for one flat executable pattern.
+#[derive(Debug)]
+// NOTE(invariant): `pattern` retains a nonempty atom stream, `fixed` was derived from that same pattern when present, `pointer_width` fixes target pointer decoding, and `base` is applied through checked arithmetic before offsets become virtual capture addresses.
+pub struct Scanner<'pattern> {
+    /// Executable pattern interpreted at candidate starts.
+    pattern: Pattern<'pattern>,
+
+    /// Private fixed-width acceleration engine when the pattern has a fixed projection.
+    fixed: Option<fixed::scan::Scanner<'pattern>>,
+
+    /// Width used by absolute pointer operations and zero-width push or skip atoms.
+    pointer_width: PointerWidth,
+
+    /// Virtual address corresponding to byte-image offset zero.
+    base: u64,
 }
 
 impl<'pattern> Scanner<'pattern> {
-    /// Prepare anchor search and SIMD dispatch state for repeated scans.
-    ///
-    /// Construction does not inspect a haystack and performs no pattern parsing. A `memmem` finder is
-    /// created only when the compiled search plan contains an exact literal run.
+    /// Prepare one executable pattern with a zero virtual base.
     #[inline]
-    pub fn new(target_pattern: Pattern<'pattern>) -> Self {
-        let anchor = target_pattern.anchor();
-        let finder = anchor.map(Finder::new);
-        let level = Level::new();
+    #[must_use]
+    pub fn new(target_pattern: Pattern<'pattern>, target_pointer_width: PointerWidth) -> Self {
+        Self::with_base(target_pattern, target_pointer_width, 0)
+    }
+
+    /// Prepare one executable pattern with an explicit virtual base address.
+    #[inline]
+    #[must_use]
+    pub fn with_base(
+        target_pattern: Pattern<'pattern>,
+        target_pointer_width: PointerWidth,
+        target_base: u64,
+    ) -> Self {
+        let fixed = target_pattern.fixed().map(fixed::scan::Scanner::new);
 
         Self {
             pattern: target_pattern,
-            finder,
-            level,
+            fixed,
+            pointer_width: target_pointer_width,
+            base: target_base,
         }
     }
 
-    /// Return the fixed pattern width.
+    /// Return the capture-array width required by this executable program.
     #[inline]
     #[must_use]
-    pub const fn pattern_len(&self) -> usize {
+    pub const fn save_len(&self) -> usize {
         let Self { pattern, .. } = self;
 
-        pattern.len()
+        pattern.save_len()
     }
 
-    /// Find the earliest matching start offset in one haystack.
+    /// Return the compiled pattern interpreted by this scanner.
+    #[inline]
+    #[must_use]
+    pub const fn pattern(&self) -> Pattern<'pattern> {
+        let Self { pattern, .. } = self;
+
+        *pattern
+    }
+
+    /// Execute the pattern at one exact byte-image offset.
     ///
-    /// The returned offset is relative to the beginning of `target_haystack`. A haystack shorter than
-    /// the fixed pattern width cannot match and returns `None`.
+    /// Out-of-bounds capture stores are ignored. Failed branches may leave temporary values in the
+    /// supplied save array, matching Pelite's interpreter contract. Callers that need transactional
+    /// captures should execute with temporary storage and copy it only after success.
+    #[inline]
+    pub fn exec(
+        &self,
+        target_haystack: &[u8],
+        target_start: usize,
+        target_saves: &mut [u64],
+    ) -> bool {
+        if target_start > target_haystack.len() {
+            return false;
+        }
+
+        let Self { pattern, .. } = self;
+        let mut target_exec = Exec {
+            pattern: *pattern,
+            cursor: target_start,
+            pc: 0,
+        };
+
+        self.run(target_haystack, &mut target_exec, target_saves)
+    }
+
+    /// Find the earliest matching candidate start.
     #[inline]
     #[must_use]
     pub fn find(&self, target_haystack: &[u8]) -> Option<usize> {
-        self.find_from(target_haystack, 0)
+        let mut ignored = [];
+
+        self.find_from(target_haystack, 0, target_haystack.len(), &mut ignored)
     }
 
-    /// Iterate matching start offsets in ascending order while preserving overlap.
+    /// Find the earliest match and retain captures available in the supplied save slice.
     ///
-    /// The iterator borrows both this scanner and the haystack. It performs no allocation and resumes
-    /// each search one byte after the previously yielded start.
+    /// Failed candidate executions may leave temporary values in `target_saves` before a later
+    /// candidate succeeds or the search is exhausted.
+    #[inline]
+    pub fn find_with(&self, target_haystack: &[u8], target_saves: &mut [u64]) -> Option<usize> {
+        self.find_from(target_haystack, 0, target_haystack.len(), target_saves)
+    }
+
+    /// Determine whether exactly one candidate start matches.
+    ///
+    /// The second uniqueness probe uses an empty save slice so first-match captures remain intact.
+    #[inline]
+    pub fn finds(&self, target_haystack: &[u8], target_saves: &mut [u64]) -> bool {
+        let Some(target_first) = self.find_with(target_haystack, target_saves) else {
+            return false;
+        };
+        let mut ignored = [];
+
+        self.find_from(
+            target_haystack,
+            target_first.saturating_add(1),
+            target_haystack.len(),
+            &mut ignored,
+        )
+        .is_none()
+    }
+
+    /// Find the earliest matching candidate start inside one explicit range.
+    ///
+    /// The range limits only candidate starts. Successful execution may consume bytes or follow
+    /// references outside that range while remaining inside `target_haystack`.
     #[inline]
     #[must_use]
-    pub const fn find_iter<'scanner, 'haystack>(
+    pub fn find_in(&self, target_haystack: &[u8], target_range: Range<usize>) -> Option<usize> {
+        let mut ignored = [];
+
+        self.find_from(
+            target_haystack,
+            target_range.start,
+            target_range.end.min(target_haystack.len()),
+            &mut ignored,
+        )
+    }
+
+    /// Find the earliest ranged match and retain supplied capture slots.
+    #[inline]
+    pub fn find_with_in(
+        &self,
+        target_haystack: &[u8],
+        target_range: Range<usize>,
+        target_saves: &mut [u64],
+    ) -> Option<usize> {
+        self.find_from(
+            target_haystack,
+            target_range.start,
+            target_range.end.min(target_haystack.len()),
+            target_saves,
+        )
+    }
+
+    /// Determine whether exactly one candidate start inside one explicit range matches.
+    #[inline]
+    pub fn finds_in(
+        &self,
+        target_haystack: &[u8],
+        target_range: Range<usize>,
+        target_saves: &mut [u64],
+    ) -> bool {
+        let target_end = target_range.end.min(target_haystack.len());
+        let Some(target_first) = self.find_from(
+            target_haystack,
+            target_range.start,
+            target_end,
+            target_saves,
+        ) else {
+            return false;
+        };
+        let mut ignored = [];
+
+        self.find_from(
+            target_haystack,
+            target_first.saturating_add(1),
+            target_end,
+            &mut ignored,
+        )
+        .is_none()
+    }
+
+    /// Iterate matching candidate starts in ascending order while preserving overlap.
+    #[inline]
+    #[must_use]
+    pub const fn matches<'scanner, 'haystack>(
         &'scanner self,
         target_haystack: &'haystack [u8],
     ) -> Matches<'scanner, 'haystack, 'pattern> {
@@ -88,195 +224,791 @@ impl<'pattern> Scanner<'pattern> {
             scanner: self,
             haystack: target_haystack,
             next_offset: 0,
+            end_offset: target_haystack.len(),
         }
     }
 
-    /// Search at or after one byte offset using only plans that benefit from SIMD dispatch.
-    fn find_from(&self, target_haystack: &[u8], target_start: usize) -> Option<usize> {
-        let Self {
-            pattern,
-            finder,
-            level,
-        } = self;
-        let width = pattern.len();
-        let available = target_haystack.len().checked_sub(width);
-        let last_start = available.filter(|target_last| target_start <= *target_last);
-        let vector_width_available = width >= MINIMUM_VECTOR_BYTES;
-
-        match (pattern.plan(), finder, last_start, vector_width_available) {
-            (_, _, None, _) => None,
-            (SearchPlan::Wildcard, _, Some(_), _) => Some(target_start),
-            (SearchPlan::Literal, Some(target_finder), Some(_), _) => target_finder
-                .find(&target_haystack[target_start..])
-                .map(|target_offset| target_start + target_offset),
-            (
-                SearchPlan::Anchor { offset, length: _ },
-                Some(target_finder),
-                Some(target_last),
-                false,
-            ) => Self::find_anchor(
-                *pattern,
-                target_finder,
-                offset,
-                target_haystack,
-                target_start,
-                target_last,
-                |target_pattern, target_candidate| target_pattern.matches(target_candidate),
-            ),
-            (
-                SearchPlan::Anchor { offset, length: _ },
-                Some(target_finder),
-                Some(target_last),
-                true,
-            ) => dispatch!(*level, simd => Self::find_anchor(
-                *pattern,
-                target_finder,
-                offset,
-                target_haystack,
-                target_start,
-                target_last,
-                |target_pattern, target_candidate| Vector::new(simd).verify(target_pattern, target_candidate),
-            )),
-            (SearchPlan::Probes { first, second }, None, Some(target_last), _) => {
-                dispatch!(*level, simd => Self::find_probes(
-                    *pattern,
-                    simd,
-                    first,
-                    second,
-                    target_haystack,
-                    target_start,
-                    target_last,
-                ))
-            }
-            _ => unreachable!("scanner representation keeps finder presence coherent with plan"),
-        }
-    }
-
-    /// Discover candidates through a preprocessed exact substring anchor.
+    /// Iterate matching candidate starts inside one explicit range.
     #[inline]
-    fn find_anchor<Verifier>(
-        target_pattern: Pattern<'_>,
-        target_finder: &Finder<'_>,
-        target_anchor_offset: usize,
+    #[must_use]
+    pub fn matches_in<'scanner, 'haystack>(
+        &'scanner self,
+        target_haystack: &'haystack [u8],
+        target_range: Range<usize>,
+    ) -> Matches<'scanner, 'haystack, 'pattern> {
+        let end_offset = target_range.end.min(target_haystack.len());
+
+        Matches {
+            scanner: self,
+            haystack: target_haystack,
+            next_offset: target_range.start,
+            end_offset,
+        }
+    }
+
+    /// Search one candidate-start interval using an exact leading prefix when available.
+    fn find_from(
+        &self,
         target_haystack: &[u8],
         target_start: usize,
-        target_last: usize,
-        mut target_verify: Verifier,
-    ) -> Option<usize>
-    where
-        Verifier: FnMut(Pattern<'_>, &[u8]) -> bool,
-    {
-        let anchor_search_start = target_start + target_anchor_offset;
-        let anchor_search_end = target_last + target_anchor_offset + target_finder.needle().len();
-        let anchor_haystack = target_haystack
-            .get(anchor_search_start..anchor_search_end)
-            .expect("validated anchor search span must remain within the haystack");
-        let mut search_offset = 0usize;
-        let mut result = None;
+        target_end: usize,
+        target_saves: &mut [u64],
+    ) -> Option<usize> {
+        if target_start >= target_end {
+            return None;
+        }
 
-        while result.is_none() && search_offset <= anchor_haystack.len() {
-            let search_bytes = anchor_haystack
-                .get(search_offset..)
-                .expect("anchor search offset must remain within the validated span");
-            let found = target_finder.find(search_bytes);
+        let Self { fixed, .. } = self;
 
-            match found {
-                Some(target_relative) => {
-                    let anchor_offset = anchor_search_start + search_offset + target_relative;
-                    let candidate = anchor_offset - target_anchor_offset;
-                    let candidate_end = candidate + target_pattern.len();
-                    let candidate_bytes = target_haystack
-                        .get(candidate..candidate_end)
-                        .expect("anchor candidate must remain within the validated haystack span");
-                    let is_valid_candidate = target_verify(target_pattern, candidate_bytes);
+        if fixed.is_some() {
+            return self.find_fixed(target_haystack, target_start, target_end, target_saves);
+        }
 
-                    if is_valid_candidate {
-                        result = Some(candidate);
-                    } else {
-                        search_offset += target_relative + 1;
+        let mut prefix = [0u8; PREFIX_BYTES];
+        let prefix_len = self.prefix(&mut prefix);
+
+        match prefix_len {
+            0 => self.find_bruteforce(target_haystack, target_start, target_end, target_saves),
+            1 => self.find_byte(
+                target_haystack,
+                target_start,
+                target_end,
+                prefix[0],
+                target_saves,
+            ),
+            target_len => self.find_prefix(
+                target_haystack,
+                target_start,
+                target_end,
+                &prefix[..target_len],
+                target_saves,
+            ),
+        }
+    }
+
+    /// Search through the private fixed-width engine and preserve executable capture semantics.
+    fn find_fixed(
+        &self,
+        target_haystack: &[u8],
+        target_start: usize,
+        target_end: usize,
+        target_saves: &mut [u64],
+    ) -> Option<usize> {
+        let Self { fixed, .. } = self;
+        let target_fixed = fixed.as_ref()?;
+        let mut next = target_start;
+
+        while next < target_end {
+            let target_candidate = target_fixed.find_in(target_haystack, next, target_end)?;
+
+            if self.exec(target_haystack, target_candidate, target_saves) {
+                return Some(target_candidate);
+            }
+
+            next = target_candidate.saturating_add(1);
+        }
+
+        None
+    }
+
+    /// Extract the deterministic exact-byte prefix used only for candidate filtering.
+    fn prefix(&self, target_prefix: &mut [u8; PREFIX_BYTES]) -> usize {
+        let Self { pattern, .. } = self;
+        let mut length = 0usize;
+
+        for target_atom in pattern.atoms() {
+            match *target_atom {
+                Atom::Byte(target_byte) if length < target_prefix.len() => {
+                    target_prefix[length] = target_byte;
+                    length += 1;
+                }
+                Atom::Save(..) | Atom::Aligned(..) | Atom::Nop => {}
+                _ => break,
+            }
+        }
+
+        length
+    }
+
+    /// Brute-force candidate starts when no exact leading byte is available.
+    fn find_bruteforce(
+        &self,
+        target_haystack: &[u8],
+        target_start: usize,
+        target_end: usize,
+        target_saves: &mut [u64],
+    ) -> Option<usize> {
+        (target_start..target_end)
+            .find(|&target_candidate| self.exec(target_haystack, target_candidate, target_saves))
+    }
+
+    /// Filter candidate starts through one leading exact byte.
+    fn find_byte(
+        &self,
+        target_haystack: &[u8],
+        target_start: usize,
+        target_end: usize,
+        target_byte: u8,
+        target_saves: &mut [u64],
+    ) -> Option<usize> {
+        let mut next = target_start;
+
+        while next < target_end {
+            let target_slice = target_haystack.get(next..target_end)?;
+            let target_relative = memchr(target_byte, target_slice)?;
+            let target_candidate = next.checked_add(target_relative)?;
+
+            if self.exec(target_haystack, target_candidate, target_saves) {
+                return Some(target_candidate);
+            }
+
+            next = target_candidate.saturating_add(1);
+        }
+
+        None
+    }
+
+    /// Filter candidate starts through a multi-byte exact prefix.
+    fn find_prefix(
+        &self,
+        target_haystack: &[u8],
+        target_start: usize,
+        target_end: usize,
+        target_prefix: &[u8],
+        target_saves: &mut [u64],
+    ) -> Option<usize> {
+        let extension = target_prefix.len().saturating_sub(1);
+        let search_end = target_end
+            .saturating_add(extension)
+            .min(target_haystack.len());
+        let mut next = target_start;
+
+        while next < target_end {
+            let target_slice = target_haystack.get(next..search_end)?;
+            let target_relative = memmem::find(target_slice, target_prefix)?;
+            let target_candidate = next.checked_add(target_relative)?;
+
+            if target_candidate >= target_end {
+                return None;
+            }
+
+            if self.exec(target_haystack, target_candidate, target_saves) {
+                return Some(target_candidate);
+            }
+
+            next = target_candidate.saturating_add(1);
+        }
+
+        None
+    }
+
+    /// Execute one branch until success or mismatch.
+    fn run(
+        &self,
+        target_haystack: &[u8],
+        target_exec: &mut Exec<'pattern>,
+        target_saves: &mut [u64],
+    ) -> bool {
+        let mut mask = u8::MAX;
+
+        loop {
+            let Some(target_atom) = Self::next(target_exec) else {
+                return true;
+            };
+
+            let valid = match target_atom {
+                Atom::Byte(..) | Atom::Fuzzy(..) => {
+                    Self::match_byte(target_haystack, target_exec, target_atom, &mut mask)
+                }
+                Atom::Save(..)
+                | Atom::Check(..)
+                | Atom::Aligned(..)
+                | Atom::ReadI8(..)
+                | Atom::ReadU8(..)
+                | Atom::ReadI16(..)
+                | Atom::ReadU16(..)
+                | Atom::ReadI32(..)
+                | Atom::ReadU32(..)
+                | Atom::Zero(..) => {
+                    self.capture(target_haystack, target_exec, target_saves, target_atom)
+                }
+                Atom::Push(target_skip) => {
+                    let valid = self.push(target_haystack, target_exec, target_saves, target_skip);
+                    mask = u8::MAX;
+
+                    valid
+                }
+                Atom::Pop => return true,
+                Atom::Skip(..) | Atom::Back(..) => {
+                    self.move_cursor(target_haystack.len(), target_exec, target_atom)
+                }
+                Atom::Many(target_limit) => {
+                    return self.many(target_haystack, target_exec, target_saves, target_limit);
+                }
+                Atom::Jump1 | Atom::Jump4 | Atom::Pointer | Atom::Pir(..) => {
+                    self.follow(target_haystack, target_exec, target_saves, target_atom)
+                }
+                Atom::Case(target_next) => {
+                    self.case(target_haystack, target_exec, target_saves, target_next)
+                }
+                Atom::Break(target_next) => return Self::break_branch(target_exec, target_next),
+                Atom::Nop => true,
+            };
+
+            if !valid {
+                return false;
+            }
+        }
+    }
+
+    /// Apply one exact or fuzzy byte operation.
+    fn match_byte(
+        target_haystack: &[u8],
+        target_exec: &mut Exec<'pattern>,
+        target_atom: Atom,
+        target_mask: &mut u8,
+    ) -> bool {
+        match target_atom {
+            Atom::Byte(target_pattern) => {
+                let Exec { cursor, .. } = target_exec;
+                let Some(&target_byte) = target_haystack.get(*cursor) else {
+                    return false;
+                };
+
+                if target_byte & *target_mask != target_pattern & *target_mask {
+                    return false;
+                }
+
+                *target_mask = u8::MAX;
+                let Some(target_cursor) = cursor.checked_add(1) else {
+                    return false;
+                };
+                *cursor = target_cursor;
+
+                true
+            }
+            Atom::Fuzzy(target_next_mask) => {
+                *target_mask = target_next_mask;
+
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Execute one followed subpattern and restore its caller cursor.
+    fn push(
+        &self,
+        target_haystack: &[u8],
+        target_exec: &mut Exec<'pattern>,
+        target_saves: &mut [u64],
+        target_skip: usize,
+    ) -> bool {
+        let cursor = {
+            let Exec { cursor, .. } = target_exec;
+
+            *cursor
+        };
+        let target_skip = self.movement(target_skip);
+        let Some(target_resume) = cursor.checked_add(target_skip) else {
+            return false;
+        };
+        let mut target_nested = *target_exec;
+
+        if !self.run(target_haystack, &mut target_nested, target_saves) {
+            return false;
+        }
+
+        let Exec { pc, cursor, .. } = target_exec;
+        let Exec { pc: nested_pc, .. } = target_nested;
+        *pc = nested_pc;
+        *cursor = target_resume;
+
+        true
+    }
+
+    /// Apply one fixed forward or backward cursor movement.
+    const fn move_cursor(
+        &self,
+        target_length: usize,
+        target_exec: &mut Exec<'pattern>,
+        target_atom: Atom,
+    ) -> bool {
+        let Exec { cursor, .. } = target_exec;
+        let target_cursor = match target_atom {
+            Atom::Skip(target_skip) => {
+                let target_skip = self.movement(target_skip);
+
+                cursor.checked_add(target_skip)
+            }
+            Atom::Back(target_back) => {
+                let target_back = self.movement(target_back);
+
+                cursor.checked_sub(target_back)
+            }
+            _ => None,
+        };
+        let Some(target_cursor) = target_cursor else {
+            return false;
+        };
+
+        if target_cursor > target_length {
+            return false;
+        }
+
+        *cursor = target_cursor;
+
+        true
+    }
+
+    /// Follow one relative, absolute, or saved-base reference.
+    fn follow(
+        &self,
+        target_haystack: &[u8],
+        target_exec: &mut Exec<'pattern>,
+        target_saves: &[u64],
+        target_atom: Atom,
+    ) -> bool {
+        let Exec { cursor, .. } = target_exec;
+        let target_cursor = match target_atom {
+            Atom::Jump1 => target_haystack.get(*cursor).and_then(|target_byte| {
+                let target_displacement = i64::from(target_byte.cast_signed());
+                let target_resume = cursor.checked_add(1)?;
+
+                Self::relative(target_resume, target_displacement)
+            }),
+            Atom::Jump4 => {
+                Self::read_i32(target_haystack, *cursor).and_then(|target_displacement| {
+                    let target_resume = cursor.checked_add(4)?;
+
+                    Self::relative(target_resume, target_displacement)
+                })
+            }
+            Atom::Pointer => self
+                .read_pointer(target_haystack, *cursor)
+                .and_then(|target_pointer| self.offset(target_pointer, target_haystack.len())),
+            Atom::Pir(target_slot) => {
+                let target_displacement = Self::read_i32(target_haystack, *cursor);
+                let target_current = self.absolute(*cursor);
+
+                target_displacement
+                    .zip(target_current)
+                    .and_then(|(target_displacement, target_current)| {
+                        let target_anchor = target_saves
+                            .get(usize::from(target_slot))
+                            .copied()
+                            .unwrap_or(target_current);
+
+                        Self::relative_u64(target_anchor, target_displacement)
+                    })
+                    .and_then(|target_absolute| self.offset(target_absolute, target_haystack.len()))
+            }
+            _ => None,
+        };
+        let Some(target_cursor) = target_cursor else {
+            return false;
+        };
+
+        if target_cursor > target_haystack.len() {
+            return false;
+        }
+
+        *cursor = target_cursor;
+
+        true
+    }
+
+    /// Apply one capture, equality, alignment, or integer-read operation.
+    fn capture(
+        &self,
+        target_haystack: &[u8],
+        target_exec: &mut Exec<'pattern>,
+        target_saves: &mut [u64],
+        target_atom: Atom,
+    ) -> bool {
+        let Exec { cursor, .. } = target_exec;
+
+        match target_atom {
+            Atom::Save(target_slot) => {
+                let Some(target_value) = self.absolute(*cursor) else {
+                    return false;
+                };
+                Self::write(target_saves, target_slot, target_value);
+            }
+            Atom::Check(target_slot) => {
+                if let Some(target_saved) = target_saves.get(usize::from(target_slot)) {
+                    let Some(target_current) = self.absolute(*cursor) else {
+                        return false;
+                    };
+
+                    if *target_saved != target_current {
+                        return false;
                     }
                 }
-                None => search_offset = anchor_haystack.len() + 1,
             }
-        }
+            Atom::Aligned(target_exponent) => {
+                let Some(target_alignment) = 1u64.checked_shl(u32::from(target_exponent)) else {
+                    return false;
+                };
+                let Some(target_current) = self.absolute(*cursor) else {
+                    return false;
+                };
 
-        result
-    }
-
-    /// Discover candidates through one or two masked SIMD probes.
-    #[inline]
-    fn find_probes<SimdType: Simd>(
-        target_pattern: Pattern<'_>,
-        target_simd: SimdType,
-        target_first: Probe,
-        target_second: Option<Probe>,
-        target_haystack: &[u8],
-        target_start: usize,
-        target_last: usize,
-    ) -> Option<usize> {
-        let lanes = SimdType::u8s::N;
-        let mut base = target_start;
-        let mut result = None;
-
-        while result.is_none() && base <= target_last {
-            let remaining = target_last - base + 1;
-            let candidate_count = remaining.min(lanes);
-            let mut candidate_mask = Vector::new(target_simd).mask(
-                target_haystack,
-                base,
-                target_first,
-                target_second,
-                candidate_count,
-            );
-
-            while candidate_mask != 0 && result.is_none() {
-                let lane = candidate_mask.trailing_zeros() as usize;
-                let candidate = base + lane;
-                let candidate_end = candidate + target_pattern.len();
-                let candidate_bytes = target_haystack
-                    .get(candidate..candidate_end)
-                    .expect("probe candidate must remain within the validated haystack span");
-                let is_valid_candidate =
-                    Vector::new(target_simd).verify(target_pattern, candidate_bytes);
-
-                if is_valid_candidate {
-                    result = Some(candidate);
-                } else {
-                    candidate_mask &= candidate_mask - 1;
+                if target_current % target_alignment != 0 {
+                    return false;
                 }
             }
+            Atom::ReadI8(target_slot) => {
+                let Some(&target_byte) = target_haystack.get(*cursor) else {
+                    return false;
+                };
+                let target_value = i64::from(target_byte.cast_signed()).cast_unsigned();
+                Self::write(target_saves, target_slot, target_value);
 
-            base = base.saturating_add(candidate_count);
+                let Some(target_cursor) = cursor.checked_add(1) else {
+                    return false;
+                };
+                *cursor = target_cursor;
+            }
+            Atom::ReadU8(target_slot) => {
+                let Some(&target_byte) = target_haystack.get(*cursor) else {
+                    return false;
+                };
+                Self::write(target_saves, target_slot, u64::from(target_byte));
+
+                let Some(target_cursor) = cursor.checked_add(1) else {
+                    return false;
+                };
+                *cursor = target_cursor;
+            }
+            Atom::ReadI16(target_slot) => {
+                let Some(target_value) = Self::read_i16(target_haystack, *cursor) else {
+                    return false;
+                };
+                Self::write(target_saves, target_slot, target_value.cast_unsigned());
+
+                let Some(target_cursor) = cursor.checked_add(2) else {
+                    return false;
+                };
+                *cursor = target_cursor;
+            }
+            Atom::ReadU16(target_slot) => {
+                let Some(target_value) = Self::read_u16(target_haystack, *cursor) else {
+                    return false;
+                };
+                Self::write(target_saves, target_slot, u64::from(target_value));
+
+                let Some(target_cursor) = cursor.checked_add(2) else {
+                    return false;
+                };
+                *cursor = target_cursor;
+            }
+            Atom::ReadI32(target_slot) => {
+                let Some(target_value) = Self::read_i32(target_haystack, *cursor) else {
+                    return false;
+                };
+                Self::write(target_saves, target_slot, target_value.cast_unsigned());
+
+                let Some(target_cursor) = cursor.checked_add(4) else {
+                    return false;
+                };
+                *cursor = target_cursor;
+            }
+            Atom::ReadU32(target_slot) => {
+                let Some(target_value) = Self::read_u32(target_haystack, *cursor) else {
+                    return false;
+                };
+                Self::write(target_saves, target_slot, u64::from(target_value));
+
+                let Some(target_cursor) = cursor.checked_add(4) else {
+                    return false;
+                };
+                *cursor = target_cursor;
+            }
+            Atom::Zero(target_slot) => Self::write(target_saves, target_slot, 0),
+            _ => return false,
         }
 
-        result
+        true
+    }
+
+    /// Execute or skip one alternative branch.
+    fn case(
+        &self,
+        target_haystack: &[u8],
+        target_exec: &mut Exec<'pattern>,
+        target_saves: &mut [u64],
+        target_next: usize,
+    ) -> bool {
+        let (pattern, cursor, pc) = {
+            let Exec {
+                pattern,
+                cursor,
+                pc,
+            } = target_exec;
+
+            (*pattern, *cursor, *pc)
+        };
+        let mut target_branch = *target_exec;
+
+        if self.run(target_haystack, &mut target_branch, target_saves) {
+            *target_exec = target_branch;
+
+            return true;
+        }
+
+        let Some(target_next_pc) = pc.checked_add(target_next) else {
+            return false;
+        };
+
+        if target_next_pc > pattern.atoms().len() {
+            return false;
+        }
+
+        let Exec {
+            cursor: current,
+            pc,
+            ..
+        } = target_exec;
+        *pc = target_next_pc;
+        *current = cursor;
+
+        true
+    }
+
+    /// Finish the current alternative and advance past its sibling branches.
+    const fn break_branch(target_exec: &mut Exec<'pattern>, target_next: usize) -> bool {
+        let Exec { pattern, pc, .. } = target_exec;
+        let Some(target_next_pc) = pc.checked_add(target_next) else {
+            return false;
+        };
+
+        if target_next_pc > pattern.atoms().len() {
+            return false;
+        }
+
+        *pc = target_next_pc;
+
+        true
+    }
+
+    /// Retry the remaining program at increasing cursor offsets.
+    fn many(
+        &self,
+        target_haystack: &[u8],
+        target_exec: &mut Exec<'pattern>,
+        target_saves: &mut [u64],
+        target_limit: usize,
+    ) -> bool {
+        let available = target_haystack.len().saturating_sub(target_exec.cursor);
+        let extent = if target_limit == 0 {
+            available
+        } else {
+            target_limit.min(available)
+        };
+
+        for target_skip in 0..extent {
+            let Some(target_cursor) = target_exec.cursor.checked_add(target_skip) else {
+                return false;
+            };
+            let mut target_branch = *target_exec;
+            target_branch.cursor = target_cursor;
+
+            if self.run(target_haystack, &mut target_branch, target_saves) {
+                *target_exec = target_branch;
+
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Fetch and advance one atom from the current program counter.
+    #[inline]
+    fn next(target_exec: &mut Exec<'pattern>) -> Option<Atom> {
+        let Exec { pattern, pc, .. } = target_exec;
+        let target_atom = pattern.atoms().get(*pc).copied()?;
+        *pc += 1;
+
+        Some(target_atom)
+    }
+
+    /// Resolve zero movement to target pointer width, matching Pelite push and skip semantics.
+    #[inline]
+    const fn movement(&self, target_movement: usize) -> usize {
+        let Self { pointer_width, .. } = self;
+
+        if target_movement == 0 {
+            pointer_width.bytes()
+        } else {
+            target_movement
+        }
+    }
+
+    /// Convert one byte-image offset into its checked virtual address.
+    #[inline]
+    fn absolute(&self, target_offset: usize) -> Option<u64> {
+        let Self { base, .. } = self;
+        let target_offset = u64::try_from(target_offset).ok()?;
+
+        base.checked_add(target_offset)
+    }
+
+    /// Convert one virtual address into a checked byte-image offset.
+    #[inline]
+    fn offset(&self, target_address: u64, target_length: usize) -> Option<usize> {
+        let Self { base, .. } = self;
+        let target_offset = target_address.checked_sub(*base)?;
+        let target_offset = usize::try_from(target_offset).ok()?;
+
+        (target_offset <= target_length).then_some(target_offset)
+    }
+
+    /// Decode one target-width little-endian absolute pointer.
+    fn read_pointer(&self, target_haystack: &[u8], target_cursor: usize) -> Option<u64> {
+        let Self { pointer_width, .. } = self;
+        let target_end = target_cursor.checked_add(pointer_width.bytes())?;
+        let target_bytes = target_haystack.get(target_cursor..target_end)?;
+
+        match pointer_width {
+            PointerWidth::U32 => Some(u64::from(u32::from_le_bytes(target_bytes.try_into().ok()?))),
+            PointerWidth::U64 => Some(u64::from_le_bytes(target_bytes.try_into().ok()?)),
+        }
+    }
+
+    /// Add one signed displacement to a byte-image offset.
+    #[inline]
+    fn relative(target_base: usize, target_displacement: i64) -> Option<usize> {
+        if target_displacement >= 0 {
+            target_base.checked_add(usize::try_from(target_displacement).ok()?)
+        } else {
+            target_base.checked_sub(usize::try_from(target_displacement.unsigned_abs()).ok()?)
+        }
+    }
+
+    /// Add one signed displacement to a virtual address.
+    #[inline]
+    fn relative_u64(target_base: u64, target_displacement: i64) -> Option<u64> {
+        if target_displacement >= 0 {
+            target_base.checked_add(u64::try_from(target_displacement).ok()?)
+        } else {
+            target_base.checked_sub(target_displacement.unsigned_abs())
+        }
+    }
+
+    /// Write one capture slot when the caller supplied it.
+    #[inline]
+    fn write(target_saves: &mut [u64], target_slot: u8, target_value: u64) {
+        if let Some(target_save) = target_saves.get_mut(usize::from(target_slot)) {
+            *target_save = target_value;
+        }
+    }
+
+    /// Decode one signed little-endian word.
+    #[inline]
+    fn read_i16(target_haystack: &[u8], target_cursor: usize) -> Option<i64> {
+        let target_end = target_cursor.checked_add(2)?;
+        let target_bytes = target_haystack.get(target_cursor..target_end)?;
+
+        Some(i64::from(i16::from_le_bytes(target_bytes.try_into().ok()?)))
+    }
+
+    /// Decode one unsigned little-endian word.
+    #[inline]
+    fn read_u16(target_haystack: &[u8], target_cursor: usize) -> Option<u16> {
+        let target_end = target_cursor.checked_add(2)?;
+        let target_bytes = target_haystack.get(target_cursor..target_end)?;
+
+        Some(u16::from_le_bytes(target_bytes.try_into().ok()?))
+    }
+
+    /// Decode one signed little-endian dword.
+    #[inline]
+    fn read_i32(target_haystack: &[u8], target_cursor: usize) -> Option<i64> {
+        let target_end = target_cursor.checked_add(4)?;
+        let target_bytes = target_haystack.get(target_cursor..target_end)?;
+
+        Some(i64::from(i32::from_le_bytes(target_bytes.try_into().ok()?)))
+    }
+
+    /// Decode one unsigned little-endian dword.
+    #[inline]
+    fn read_u32(target_haystack: &[u8], target_cursor: usize) -> Option<u32> {
+        let target_end = target_cursor.checked_add(4)?;
+        let target_bytes = target_haystack.get(target_cursor..target_end)?;
+
+        Some(u32::from_le_bytes(target_bytes.try_into().ok()?))
     }
 }
 
-/// Allocation-free iterator over ordered and potentially overlapping matches.
-///
-/// The iterator stores only the next candidate start. It delegates each search step to the retained
-/// [`Scanner`], so finder preprocessing and SIMD feature detection are reused for the full iteration.
-#[derive(Debug)]
-// NOTE(invariant): `next_offset` is either zero or one byte past the previously yielded match start, so overlapping matches remain observable and progress is guaranteed.
+/// Ordered iterator over executable-pattern match starts.
+#[derive(Debug, Clone)]
+// NOTE(invariant): `next_offset` is zero or one byte beyond the previously yielded candidate start and `end_offset` is the exclusive candidate boundary.
 pub struct Matches<'scanner, 'haystack, 'pattern> {
-    /// Preprocessed scanner reused for each search step.
+    /// Scanner reused by every iterator step.
     scanner: &'scanner Scanner<'pattern>,
 
-    /// Haystack retained for the iterator lifetime.
+    /// Byte image searched by every iterator step.
     haystack: &'haystack [u8],
 
     /// Earliest candidate start for the next search.
     next_offset: usize,
+
+    /// Exclusive candidate-start boundary retained from the requested range.
+    end_offset: usize,
 }
 
-pub mod prelude {
-    //! Convenience imports for preprocessed pattern scanning.
-    //!
-    //! This prelude exposes the reusable scanner and overlapping match iterator while leaving
-    //! vector dispatch and candidate planning private.
+impl<'scanner, 'pattern> Matches<'scanner, '_, 'pattern> {
+    /// Return the scanner reused by every iteration step.
+    #[inline]
+    #[must_use]
+    pub const fn scanner(&self) -> &'scanner Scanner<'pattern> {
+        let Self { scanner, .. } = self;
 
-    pub use super::{Matches, Scanner};
+        scanner
+    }
+
+    /// Return the compiled pattern interpreted by this match iterator.
+    #[inline]
+    #[must_use]
+    pub const fn pattern(&self) -> Pattern<'pattern> {
+        let Self { scanner, .. } = self;
+
+        scanner.pattern()
+    }
+
+    /// Return the remaining candidate-start range.
+    #[inline]
+    #[must_use]
+    pub const fn range(&self) -> Range<usize> {
+        let Self {
+            next_offset,
+            end_offset,
+            ..
+        } = self;
+
+        *next_offset..*end_offset
+    }
+
+    /// Find the next match and retain captures available in the supplied save slice.
+    ///
+    /// Failed candidate executions may leave temporary values in `target_saves`. A successful
+    /// result advances the iterator by one byte from the matched candidate start so overlap remains
+    /// observable.
+    #[inline]
+    pub fn next_with(&mut self, target_saves: &mut [u64]) -> Option<usize> {
+        let Self {
+            scanner,
+            haystack,
+            next_offset,
+            end_offset,
+        } = self;
+        let target_match = scanner.find_from(haystack, *next_offset, *end_offset, target_saves)?;
+        *next_offset = target_match.saturating_add(1);
+
+        Some(target_match)
+    }
 }
 
 impl Iterator for Matches<'_, '_, '_> {
@@ -284,69 +1016,223 @@ impl Iterator for Matches<'_, '_, '_> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let Self {
-            scanner,
-            haystack,
-            next_offset,
-        } = self;
-        let result = scanner.find_from(haystack, *next_offset);
+        let mut ignored = [];
 
-        if let Some(target_match) = result {
-            *next_offset = target_match.saturating_add(1);
-        }
-
-        result
+        self.next_with(&mut ignored)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    //! Regression coverage for every search-plan family and overlapping iteration.
+    //! Regression coverage for Pelite cursor control, captures, alternatives, ranges, and uniqueness.
 
     use super::*;
-    use crate::PatternBuf;
+    use crate::pattern::PatternBuf;
 
-    /// Parse a static test pattern without unwrap-family shortcuts.
-    fn parse_test(target_source: &str) -> PatternBuf {
-        PatternBuf::parse(target_source).expect("test pattern should parse")
+    fn scanner(target_source: &str) -> Scanner<'static> {
+        let target_pattern = Box::leak(Box::new(
+            PatternBuf::parse(target_source).expect("test pattern should parse"),
+        ));
+
+        Scanner::new(target_pattern.as_pattern(), PointerWidth::U64)
     }
 
     #[test]
-    fn literal_and_anchor_plans_find_expected_offsets() {
-        let literal = parse_test("DE AD BE EF");
-        let anchored = parse_test("?? DE AD ??");
-        let literal_haystack = [0, 0xde, 0xad, 0xbe, 0xef, 1];
-        let anchored_haystack = [0, 1, 2, 3, 4, 5, 0x00, 0xde, 0xad, 2];
+    fn pelite_documented_fixed_capture_and_range_examples_execute() {
+        let capture = scanner("B9 ' 37 13 00 00");
+        let mut capture_saves = [0_u64; 2];
+        let ranged = scanner("B8 [16] 50 [13-42] ' FF");
+        let mut range_saves = [0_u64; 2];
+        let mut ranged_bytes = [0u8; 64];
+        ranged_bytes[0] = 0xb8;
+        ranged_bytes[17] = 0x50;
+        ranged_bytes[41] = 0xff;
 
-        assert_eq!(
-            Scanner::new(literal.as_pattern()).find(&literal_haystack),
-            Some(1)
-        );
-        assert_eq!(
-            Scanner::new(anchored.as_pattern()).find(&anchored_haystack),
-            Some(6)
-        );
+        assert!(capture.exec(&[0xb9, 0x37, 0x13, 0, 0], 0, &mut capture_saves));
+        assert_eq!(capture_saves[1], 1);
+        assert!(ranged.exec(&ranged_bytes, 0, &mut range_saves));
+        assert_eq!(range_saves[1], 41);
     }
 
     #[test]
-    fn masked_probe_plan_finds_nibble_pattern() {
-        let pattern = parse_test("4? ?? ?F");
-        let haystack = [0x41, 0xaa, 0xbf, 0x52, 0x00, 0x0f];
+    fn relative_follow_and_restoring_subpattern_match_pelite_semantics() {
+        let short = scanner("31 C0 74 % ' C0");
+        let mut short_saves = [0_u64; 2];
+        let nested = scanner("E8 $ { ' } 83 F0 5C C3");
+        let mut nested_saves = [0_u64; 2];
+        let nested_bytes = [0xe8, 10, 0, 0, 0, 0x83, 0xf0, 0x5c, 0xc3, 5, 6, 7, 8, 9, 10];
 
-        assert_eq!(Scanner::new(pattern.as_pattern()).find(&haystack), Some(0));
+        assert!(short.exec(
+            &[0x31, 0xc0, 0x74, (-3i8).cast_unsigned()],
+            0,
+            &mut short_saves
+        ));
+        assert_eq!(short_saves[1], 1);
+        assert!(nested.exec(&nested_bytes, 0, &mut nested_saves));
+        assert_eq!(nested_saves[1], 15);
     }
 
     #[test]
-    fn wildcard_plan_and_iterator_preserve_overlap() {
-        let wildcard = parse_test("[2]");
-        let literal = parse_test("41 41");
-        let wildcard_scanner = Scanner::new(wildcard.as_pattern());
-        let literal_scanner = Scanner::new(literal.as_pattern());
+    fn alternatives_and_integer_reads_execute_flat_case_control_flow() {
+        let alternatives = scanner("83 C0 2A ( 6A ? | 68 ???? ) E8");
+        let reads = scanner("E8 i1 A0 u4");
+        let mut read_saves = [0_u64; 3];
 
-        assert_eq!(wildcard_scanner.find(&[1, 2, 3]), Some(0));
-        assert_eq!(
-            literal_scanner.find_iter(b"AAA").collect::<Vec<_>>(),
-            vec![0, 1]
-        );
+        assert!(alternatives.exec(&[0x83, 0xc0, 0x2a, 0x6a, 0, 0xe8], 0, &mut []));
+        assert!(alternatives.exec(&[0x83, 0xc0, 0x2a, 0x68, 0, 0, 0, 0x10, 0xe8], 0, &mut []));
+        assert!(reads.exec(
+            &[0xe8, 0xff, 0xa0, 0x78, 0x56, 0x34, 0x12],
+            0,
+            &mut read_saves
+        ));
+        assert_eq!(read_saves[1], (-1_i64).cast_unsigned());
+        assert_eq!(read_saves[2], 0x1234_5678);
+    }
+
+    #[test]
+    fn programmatic_back_pir_and_check_atoms_preserve_flat_cursor_semantics() {
+        let control_atoms = [
+            Atom::Save(0),
+            Atom::Byte(0x41),
+            Atom::Skip(1),
+            Atom::Back(1),
+            Atom::Byte(0x42),
+            Atom::Back(2),
+            Atom::Check(0),
+        ];
+        let control_pattern =
+            Pattern::from_atoms(&control_atoms).expect("control atom pattern should be valid");
+        let control = Scanner::with_base(control_pattern, PointerWidth::U64, 0x1000);
+        let mut control_saves = [0_u64; 1];
+        let pir_atoms = [Atom::Save(0), Atom::Pir(0), Atom::Byte(0x42)];
+        let pir_pattern =
+            Pattern::from_atoms(&pir_atoms).expect("PIR atom pattern should be valid");
+        let pir = Scanner::with_base(pir_pattern, PointerWidth::U64, 0x2000);
+        let mut pir_saves = [0_u64; 1];
+
+        assert!(control.exec(b"AB", 0, &mut control_saves));
+        assert_eq!(control_saves[0], 0x1000);
+        assert!(pir.exec(&[4, 0, 0, 0, 0x42], 0, &mut pir_saves));
+        assert_eq!(pir_saves[0], 0x2000);
+    }
+
+    #[test]
+    fn followed_pointer_subpattern_uses_target_pointer_width_for_resume() {
+        let target_pattern = Box::leak(Box::new(
+            PatternBuf::parse("* { 42 } 43").expect("pointer subpattern should parse"),
+        ));
+        let target_scanner =
+            Scanner::with_base(target_pattern.as_pattern(), PointerWidth::U32, 0x1000);
+        let haystack = [0x08, 0x10, 0, 0, 0x43, 0, 0, 0, 0x42];
+
+        assert_eq!(target_scanner.find(&haystack), Some(0));
+    }
+
+    #[test]
+    fn absolute_pointer_follow_uses_explicit_target_width_and_virtual_base() {
+        let target_pattern = Box::leak(Box::new(
+            PatternBuf::parse("* 42").expect("pointer pattern should parse"),
+        ));
+        let target_32 = Scanner::with_base(target_pattern.as_pattern(), PointerWidth::U32, 0x1000);
+        let target_64 = Scanner::with_base(target_pattern.as_pattern(), PointerWidth::U64, 0x1000);
+        let haystack = [0x08, 0x10, 0, 0, 0xff, 0xff, 0xff, 0xff, 0x42];
+
+        assert_eq!(target_32.find(&haystack), Some(0));
+        assert_eq!(target_64.find(&haystack), None);
+    }
+
+    #[test]
+    fn fuzzy_nibble_atoms_match_without_changing_exact_prefix_rules() {
+        let target_scanner = scanner("4? ?F 42");
+
+        assert_eq!(target_scanner.find(&[0x4a, 0xbf, 0x42]), Some(0));
+        assert_eq!(target_scanner.find(&[0x5a, 0xbf, 0x42]), None);
+    }
+
+    #[test]
+    fn explicit_range_limits_only_candidate_starts() {
+        let target_scanner = scanner("E8 $ { 42 } 43");
+        let haystack = [0xe8, 2, 0, 0, 0, 0x43, 0, 0x42, 0xe8, 0, 0, 0, 0x43];
+
+        assert_eq!(target_scanner.find_in(&haystack, 0..1), Some(0));
+        assert_eq!(target_scanner.find_in(&haystack, 1..8), None);
+    }
+
+    #[test]
+    fn followed_relative_target_must_remain_inside_the_memory_image() {
+        let target_scanner = scanner("%");
+
+        assert_eq!(target_scanner.find(&[0x7f]), None);
+        assert_eq!(target_scanner.find(&[0x00]), Some(0));
+    }
+
+    #[test]
+    fn candidate_planning_preserves_direct_execution_match_set() {
+        let sources = [
+            "41 42",
+            "41 ? 42",
+            "4? ?F 42",
+            "41 [2] 42",
+            "41 [1-4] 42",
+            "41 u1 42",
+            "@0 41 42",
+            "(41|42)43",
+        ];
+        let haystacks: &[&[u8]] = &[
+            b"",
+            b"A",
+            b"AB",
+            b"AqB",
+            b"AqqB",
+            b"xAqBy",
+            b"ABCABC",
+            &[0x41, 0x11, 0x42],
+            &[0x42, 0x43],
+        ];
+
+        for target_source in sources {
+            let target_pattern = Box::leak(Box::new(
+                PatternBuf::parse(target_source).expect("test pattern should parse"),
+            ));
+            let target_scanner = Scanner::new(target_pattern.as_pattern(), PointerWidth::U64);
+
+            for target_haystack in haystacks {
+                let filtered = target_scanner.matches(target_haystack).collect::<Vec<_>>();
+                let direct = (0..target_haystack.len())
+                    .filter(|&target_start| {
+                        target_scanner.exec(target_haystack, target_start, &mut [])
+                    })
+                    .collect::<Vec<_>>();
+
+                assert_eq!(
+                    filtered, direct,
+                    "candidate filtering changed matches for {target_source:?} in {target_haystack:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn match_iteration_can_retain_captures_for_each_match() {
+        let target_scanner = scanner("' 41");
+        let mut matches = target_scanner.matches(b"xAxA");
+        let mut saves = [0_u64; 2];
+
+        assert_eq!(matches.next_with(&mut saves), Some(1));
+        assert_eq!(saves, [1, 1]);
+        assert_eq!(matches.next_with(&mut saves), Some(3));
+        assert_eq!(saves, [3, 3]);
+        assert_eq!(matches.next_with(&mut saves), None);
+    }
+
+    #[test]
+    fn finds_requires_one_unique_match_without_disturbing_first_captures() {
+        let target_scanner = scanner("' 41 42");
+        let mut saves = [0_u64; 2];
+
+        assert!(target_scanner.finds(b"xABy", &mut saves));
+        assert_eq!(saves[1], 1);
+        assert!(!target_scanner.finds(b"ABxxAB", &mut saves));
+        assert_eq!(saves[1], 0);
     }
 }
