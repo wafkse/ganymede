@@ -14,7 +14,7 @@ resolver = "3"
 
 [workspace.dependencies]
 bitflags = "2.10"
-catalejo = { path = "../catalejo/catalejo/" }
+catalejo = { git = "https://github.com/wafkse/catalejo.git", branch = "development" }
 ganymede-process = { path = "ganymede-process", version = "0.1.0" }
 ganymede-text = { path = "ganymede-text", version = "0.1.0" }
 ganymede-elf = { path = "ganymede-elf", version = "0.1.0" }
