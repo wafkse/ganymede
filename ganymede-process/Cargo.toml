@@ -9,4 +9,4 @@ repository.workspace = true
 [dependencies]
 bitflags.workspace = true
 catalejo.workspace = true
-thiserror.workspace = true
+fack.workspace = true

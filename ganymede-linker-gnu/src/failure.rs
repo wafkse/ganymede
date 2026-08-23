@@ -14,13 +14,13 @@ use crate::{
 };
 
 /// Failure that prevents one coherent GNU loader snapshot from being returned.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum SnapshotError<AbiType>
 where
     AbiType: Abi,
 {
     /// Main ELF process-image interpretation failed.
-    #[error(transparent)]
+    #[error(transparent(0))]
     ElfImage(ProcessImageError),
 
     /// The ELF interpreter does not identify the supported GNU loader profile.
@@ -52,8 +52,8 @@ where
     AddressOverflow(AddressOperation),
 
     /// Catalejo failed while opening foreign process access.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error(transparent(0))]
+    Io(std::io::Error),
 
     /// Generated structure cannot fit in a managed foreign window.
     #[error("foreign {structure:?} access is unavailable at {address:?}")]
@@ -67,23 +67,23 @@ where
 
     /// ELF dynamic-entry lift failed.
     #[error("ELF lift failed at {address:?} with {source}")]
+    #[error(source(source))]
     ElfLift {
         /// Foreign ELF structure address.
         address: catalejo::address::ViAddr,
 
         /// ELF construction failure.
-        #[source]
         source: ElfError,
     },
 
     /// GNU linker lift failed.
     #[error("GNU linker lift failed at {address:?} with {source}")]
+    #[error(source(source))]
     LinkerLift {
         /// Foreign GNU structure address.
         address: catalejo::address::ViAddr,
 
         /// GNU linker construction failure.
-        #[source]
         source: LinkerError,
     },
 
@@ -92,8 +92,8 @@ where
     UnreadableName(catalejo::address::ViAddr),
 
     /// Foreign process byte read failed.
-    #[error(transparent)]
-    Read(#[from] ReadError),
+    #[error(transparent(0))]
+    Read(ReadError),
 
     /// Linker mutation remained visible through every complete snapshot attempt.
     #[error("GNU linker remained busy after {attempts} attempts with {reason}")]
@@ -114,4 +114,24 @@ where
         /// Final observed graph inconsistency.
         reason: InconsistentReason<AbiType>,
     },
+}
+
+impl<AbiType> From<std::io::Error> for SnapshotError<AbiType>
+where
+    AbiType: Abi,
+{
+    #[inline]
+    fn from(source: std::io::Error) -> Self {
+        Self::Io(source)
+    }
+}
+
+impl<AbiType> From<ReadError> for SnapshotError<AbiType>
+where
+    AbiType: Abi,
+{
+    #[inline]
+    fn from(source: ReadError) -> Self {
+        Self::Read(source)
+    }
 }

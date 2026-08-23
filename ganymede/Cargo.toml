@@ -12,7 +12,7 @@ ganymede-linker-gnu.workspace = true
 ganymede-module.workspace = true
 ganymede-process.workspace = true
 ganymede-text.workspace = true
-thiserror.workspace = true
+fack.workspace = true
 
 [dev-dependencies]
 catalejo.workspace = true

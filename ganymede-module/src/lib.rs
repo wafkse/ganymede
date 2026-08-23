@@ -264,7 +264,7 @@ impl Modules {
 }
 
 /// Failure while constructing format-neutral module observations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum NormalizeError {
     /// A backend-supplied image anchor is not mapped in the process snapshot.
     #[error("module anchor is not mapped at {0:?}")]

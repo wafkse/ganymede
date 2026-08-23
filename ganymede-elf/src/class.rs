@@ -371,7 +371,7 @@ impl Class for Elf64 {
 }
 
 /// Failure while proving an ELF class from process metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum ElfClassError {
     /// The auxiliary vector has no `AT_PHENT` entry.
     #[error("missing AT_PHENT auxiliary vector entry")]

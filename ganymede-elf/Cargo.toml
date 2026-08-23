@@ -12,7 +12,7 @@ catalejo.workspace = true
 ganymede-process.workspace = true
 ganymede-text.workspace = true
 num-traits.workspace = true
-thiserror.workspace = true
+fack.workspace = true
 
 [build-dependencies]
 bindgen.workspace = true

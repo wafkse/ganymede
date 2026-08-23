@@ -528,7 +528,7 @@ where
 }
 
 /// Failure while deriving symbol address semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum SymbolError {
     /// Section-relative symbol address translation overflowed its selected ELF width.
     #[error("ELF symbol runtime address overflow")]

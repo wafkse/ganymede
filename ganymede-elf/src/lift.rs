@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// Failure while lifting an ELF value from foreign memory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum ElfError {
     /// A protected foreign copy or field read faulted.
     #[error("foreign ELF read faulted")]

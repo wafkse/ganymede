@@ -401,11 +401,11 @@ where
 }
 
 /// Failure while validating one process-resident loaded image.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum LoadedImageError {
     /// Typed process access could not be opened.
-    #[error(transparent)]
-    Access(#[from] AccessError),
+    #[error(transparent(0))]
+    Access(AccessError),
 
     /// A protected typed copy faulted.
     #[error("foreign ELF record faulted at {0:?}")]
@@ -439,6 +439,13 @@ pub enum LoadedImageError {
     /// Address arithmetic overflowed in the selected ELF width.
     #[error("loaded image address arithmetic overflowed")]
     AddressOverflow,
+}
+
+impl From<AccessError> for LoadedImageError {
+    #[inline]
+    fn from(source: AccessError) -> Self {
+        Self::Access(source)
+    }
 }
 
 /// ELF32 loaded image.

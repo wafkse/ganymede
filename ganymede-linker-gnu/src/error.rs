@@ -7,7 +7,7 @@
 use crate::abi::{Abi, DebugPointer, ExtendedPointer, MapPointer};
 
 /// Failure while lifting GNU dynamic linker state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum LinkerError {
     /// A projected foreign field faulted.
     #[error("foreign GNU linker read faulted")]
@@ -15,7 +15,7 @@ pub enum LinkerError {
 }
 
 /// Address calculation that can overflow during GNU snapshot acquisition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum AddressOperation {
     /// Computing a byte offset into the ELF dynamic table.
     #[error("indexing the dynamic table")]
@@ -43,7 +43,7 @@ pub enum StructureKind {
 }
 
 /// Retryable loader mutation retained after one complete acquisition attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum BusyReason<AbiType>
 where
     AbiType: Abi,
@@ -80,7 +80,7 @@ where
 }
 
 /// Retryable stable graph inconsistency retained after one acquisition attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum InconsistentReason<AbiType>
 where
     AbiType: Abi,

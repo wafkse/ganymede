@@ -27,7 +27,7 @@ ganymede-module = { path = "ganymede-module", version = "0.1.0" }
 ganymede-pattern-core = { path = "ganymede-pattern-core", version = "0.1.0" }
 ganymede-pattern-macro = { path = "ganymede-pattern-macro", version = "0.1.0" }
 ganymede-pattern = { path = "ganymede-pattern", version = "0.1.0" }
-thiserror = { version = "2.0.20" }
+fack = "0.2.0"
 memchr = "2.8.2"
 num-traits = "0.2.19"
 fearless_simd = "0.6.0"

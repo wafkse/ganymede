@@ -9,22 +9,32 @@ use super::{Abi, ModuleSnapshot, SnapshotError};
 use crate::error::{BusyReason, InconsistentReason};
 
 /// Failure classification for one complete snapshot attempt.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum AttemptError<AbiType>
 where
     AbiType: Abi,
 {
     /// A stable validation or foreign access failure.
-    #[error(transparent)]
-    Fatal(#[from] SnapshotError<AbiType>),
+    #[error(transparent(0))]
+    Fatal(SnapshotError<AbiType>),
 
     /// A foreign mutation that can become stable on retry.
-    #[error(transparent)]
+    #[error(transparent(0))]
     Busy(BusyReason<AbiType>),
 
     /// A graph inconsistency that can disappear on retry.
-    #[error(transparent)]
+    #[error(transparent(0))]
     Inconsistent(InconsistentReason<AbiType>),
+}
+
+impl<AbiType> From<SnapshotError<AbiType>> for AttemptError<AbiType>
+where
+    AbiType: Abi,
+{
+    #[inline]
+    fn from(source: SnapshotError<AbiType>) -> Self {
+        Self::Fatal(source)
+    }
 }
 
 /// Final retryable outcome from a complete attempt.

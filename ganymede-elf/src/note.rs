@@ -120,15 +120,15 @@ impl GnuBuildId {
 }
 
 /// Failure while extracting one GNU build identifier.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum BuildIdError {
     /// Loaded-image validation failed before note interpretation.
-    #[error(transparent)]
-    Image(#[from] LoadedImageError),
+    #[error(transparent(0))]
+    Image(LoadedImageError),
 
     /// Owned note bytes could not be acquired.
-    #[error(transparent)]
-    Read(#[from] ReadError),
+    #[error(transparent(0))]
+    Read(ReadError),
 
     /// Address arithmetic overflowed in the selected ELF width.
     #[error("loaded image address arithmetic overflowed")]
@@ -149,6 +149,20 @@ pub enum BuildIdError {
     /// More than one GNU build identifier was present.
     #[error("loaded image has multiple GNU build identifiers")]
     Ambiguous,
+}
+
+impl From<LoadedImageError> for BuildIdError {
+    #[inline]
+    fn from(source: LoadedImageError) -> Self {
+        Self::Image(source)
+    }
+}
+
+impl From<ReadError> for BuildIdError {
+    #[inline]
+    fn from(source: ReadError) -> Self {
+        Self::Read(source)
+    }
 }
 
 /// Iterator over GNU build identifiers in one complete note segment.

@@ -25,7 +25,7 @@ use crate::{
 };
 
 /// Address calculation that can overflow while interpreting a process-resident ELF image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum AddressOperation {
     /// Computing a byte offset into the program-header table.
     #[error("indexing the program-header table")]
@@ -560,11 +560,11 @@ where
 }
 
 /// Failure while interpreting a running ELF image.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum ProcessImageError {
     /// ELF class proof failed.
-    #[error(transparent)]
-    Class(#[from] ElfClassError),
+    #[error(transparent(0))]
+    Class(ElfClassError),
 
     /// The process class differs from the class selected by the caller's image type.
     #[error("expected {expected:?} but process image is {actual:?}")]
@@ -658,8 +658,8 @@ pub enum ProcessImageError {
     AddressOverflow(AddressOperation),
 
     /// Catalejo failed while opening foreign process access.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error(transparent(0))]
+    Io(std::io::Error),
 
     /// A required process-resident program header cannot be opened.
     #[error("foreign ELF program header is unavailable at {0:?}")]
@@ -667,18 +667,39 @@ pub enum ProcessImageError {
 
     /// A protected ELF record copy failed at a foreign address.
     #[error("ELF record copy failed at {address:?} with {source}")]
+    #[error(source(source))]
     Lift {
         /// Foreign ELF structure address.
         address: ViAddr,
 
         /// ELF copy failure.
-        #[source]
         source: ElfError,
     },
 
     /// A foreign process byte read failed.
-    #[error(transparent)]
-    Read(#[from] ReadError),
+    #[error(transparent(0))]
+    Read(ReadError),
+}
+
+impl From<ElfClassError> for ProcessImageError {
+    #[inline]
+    fn from(source: ElfClassError) -> Self {
+        Self::Class(source)
+    }
+}
+
+impl From<std::io::Error> for ProcessImageError {
+    #[inline]
+    fn from(source: std::io::Error) -> Self {
+        Self::Io(source)
+    }
+}
+
+impl From<ReadError> for ProcessImageError {
+    #[inline]
+    fn from(source: ReadError) -> Self {
+        Self::Read(source)
+    }
 }
 
 /// Process-bound validated ELF32 image observation.

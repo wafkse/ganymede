@@ -328,6 +328,43 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
 
 [[package]]
+name = "fack"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79bf0abbd0418af0e15118cce2ebafbc49d877867f4eeb2fa3120bbf3ca94765"
+dependencies = [
+ "fack-core",
+ "fack-macro",
+]
+
+[[package]]
+name = "fack-codegen"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43eb35ab3b590c556df60c7df949560c7df1fbf45bb78ba03246e8218a836410"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "fack-core"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cb29ce2b3ca6df89e4f6b7e0ab461223ee77ee997e21f13469b7474e378e83a"
+
+[[package]]
+name = "fack-macro"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3bb69083fa40ad0cbddacc560efd420208969c7924745c28da0f94e5a836ac0"
+dependencies = [
+ "fack-codegen",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "fearless_simd"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -368,12 +405,12 @@ name = "ganymede"
 version = "0.1.0"
 dependencies = [
  "catalejo",
+ "fack",
  "ganymede-elf",
  "ganymede-linker-gnu",
  "ganymede-module",
  "ganymede-process",
  "ganymede-text",
- "thiserror",
 ]
 
 [[package]]
@@ -382,10 +419,10 @@ version = "0.1.0"
 dependencies = [
  "bindgen",
  "catalejo",
+ "fack",
  "ganymede-process",
  "ganymede-text",
  "num-traits",
- "thiserror",
 ]
 
 [[package]]
@@ -394,6 +431,7 @@ version = "0.1.0"
 dependencies = [
  "bindgen",
  "catalejo",
+ "fack",
  "ganymede-elf",
  "ganymede-module",
  "ganymede-process",
@@ -401,7 +439,6 @@ dependencies = [
  "num-traits",
  "prettyplease",
  "syn 2.0.119",
- "thiserror",
 ]
 
 [[package]]
@@ -409,9 +446,9 @@ name = "ganymede-module"
 version = "0.1.0"
 dependencies = [
  "catalejo",
+ "fack",
  "ganymede-process",
  "ganymede-text",
- "thiserror",
 ]
 
 [[package]]
@@ -447,7 +484,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "catalejo",
- "thiserror",
+ "fack",
 ]
 
 [[package]]
@@ -870,26 +907,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "thiserror"
-version = "2.0.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
-dependencies = [
- "thiserror-impl",
-]
-
-[[package]]
-name = "thiserror-impl"
-version = "2.0.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
 ]
 
 [[package]]

@@ -10,4 +10,4 @@ repository.workspace = true
 catalejo.workspace = true
 ganymede-process.workspace = true
 ganymede-text.workspace = true
-thiserror.workspace = true
+fack.workspace = true

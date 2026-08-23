@@ -970,7 +970,7 @@ where
 }
 
 /// Dynamic field required or uniquely interpreted for symbol lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, fack::prelude::Error)]
 pub enum DynamicField {
     /// Dynamic string-table pointer.
     #[error("dynamic string table")]
@@ -998,11 +998,11 @@ pub enum DynamicField {
 }
 
 /// Failure while discovering or resolving process-resident dynamic symbols.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum DynamicSymbolsError {
     /// Loaded-image acquisition failed before dynamic metadata interpretation.
-    #[error(transparent)]
-    Image(#[from] LoadedImageError),
+    #[error(transparent(0))]
+    Image(LoadedImageError),
 
     /// The complete dynamic segment had no `DT_NULL` terminator.
     #[error("ELF dynamic table has no terminator inside PT_DYNAMIC")]
@@ -1069,27 +1069,55 @@ pub enum DynamicSymbolsError {
     DynamicTableOutsideImage(ViAddr),
 
     /// Catalejo could not open a required foreign object.
-    #[error(transparent)]
-    Access(#[from] AccessError),
+    #[error(transparent(0))]
+    Access(AccessError),
 
     /// A protected process read failed.
-    #[error(transparent)]
-    Read(#[from] ReadError),
+    #[error(transparent(0))]
+    Read(ReadError),
 
     /// An ELF foreign-record lift failed.
     #[error("ELF dynamic record lift failed at {address:?} with {source}")]
+    #[error(source(source))]
     Lift {
         /// Foreign record address.
         address: ViAddr,
 
         /// ELF record construction failure.
-        #[source]
         source: ElfError,
     },
 
     /// ELF symbol address classification failed.
-    #[error(transparent)]
-    Symbol(#[from] SymbolError),
+    #[error(transparent(0))]
+    Symbol(SymbolError),
+}
+
+impl From<LoadedImageError> for DynamicSymbolsError {
+    #[inline]
+    fn from(source: LoadedImageError) -> Self {
+        Self::Image(source)
+    }
+}
+
+impl From<AccessError> for DynamicSymbolsError {
+    #[inline]
+    fn from(source: AccessError) -> Self {
+        Self::Access(source)
+    }
+}
+
+impl From<ReadError> for DynamicSymbolsError {
+    #[inline]
+    fn from(source: ReadError) -> Self {
+        Self::Read(source)
+    }
+}
+
+impl From<SymbolError> for DynamicSymbolsError {
+    #[inline]
+    fn from(source: SymbolError) -> Self {
+        Self::Symbol(source)
+    }
 }
 
 impl DynamicSymbolsError {

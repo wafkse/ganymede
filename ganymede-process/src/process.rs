@@ -267,11 +267,12 @@ impl Process {
 }
 
 /// An error while opening typed access to process memory.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum AccessError {
     /// Catalejo failed while opening or locating a peephole.
     #[error("input-output error: {0}")]
-    Io(#[source] io::Error),
+    #[error(source(0))]
+    Io(io::Error),
 
     /// No managed peephole can provide the requested typed access.
     #[error("foreign virtual address is unavailable: {0:?}")]
@@ -279,11 +280,11 @@ pub enum AccessError {
 }
 
 /// An error originating from a process-interaction.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum ReadError {
     /// Opening the required typed foreign access failed.
-    #[error(transparent)]
-    Access(#[from] AccessError),
+    #[error(transparent(0))]
+    Access(AccessError),
 
     /// A foreign-access fault occurred.
     #[error("foreign read faulted at {0:?}")]
@@ -296,6 +297,13 @@ pub enum ReadError {
     /// A bounded C string read found no NUL terminator.
     #[error("C string at {0:?} has no NUL terminator within {1} bytes")]
     MissingTerminator(ViAddr, usize),
+}
+
+impl From<AccessError> for ReadError {
+    #[inline]
+    fn from(source: AccessError) -> Self {
+        Self::Access(source)
+    }
 }
 
 /// Kernel-provided auxiliary vector metadata retained by a process snapshot.
@@ -595,11 +603,12 @@ impl Snapshot {
 }
 
 /// An error while capturing or validating a process snapshot.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum SnapshotError {
     /// The kernel query failed.
     #[error("process address space query failed: {0}")]
-    Io(#[source] io::Error),
+    #[error(source(0))]
+    Io(io::Error),
 
     /// A kernel region was empty or reversed.
     #[error("invalid mapped region {0:?}")]

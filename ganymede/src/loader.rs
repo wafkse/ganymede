@@ -57,7 +57,7 @@ impl Loader {
 }
 
 /// Exact unsupported interpreter observation retained by loader selection failure.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, fack::prelude::Error)]
 #[error("unsupported {class:?} ELF interpreter {interpreter:?}")]
 pub struct UnsupportedLoader {
     /// ELF class proven from process metadata.
@@ -276,39 +276,76 @@ impl Inspection {
 }
 
 /// Failure while selecting and capturing one coherent runtime-linker snapshot.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum CaptureError {
     /// ELF class proof from process auxiliary metadata failed.
-    #[error(transparent)]
-    Class(#[from] ElfClassError),
+    #[error(transparent(0))]
+    Class(ElfClassError),
 
     /// Main ELF process-image validation failed.
-    #[error(transparent)]
-    Image(#[from] ProcessImageError),
+    #[error(transparent(0))]
+    Image(ProcessImageError),
 
     /// No supported runtime-linker backend matches the exact interpreter.
-    #[error(transparent)]
-    Unsupported(#[from] UnsupportedLoader),
+    #[error(transparent(0))]
+    Unsupported(UnsupportedLoader),
 
     /// GNU i386 coherent acquisition failed after loader selection.
     #[error("GNU i386 snapshot acquisition failed")]
-    Gnu32(#[source] snapshot32::SnapshotError),
+    #[error(source(0))]
+    Gnu32(snapshot32::SnapshotError),
 
     /// GNU x86-64 coherent acquisition failed after loader selection.
     #[error("GNU x86-64 snapshot acquisition failed")]
-    Gnu64(#[source] snapshot::SnapshotError),
+    #[error(source(0))]
+    Gnu64(snapshot::SnapshotError),
+}
+
+impl From<ElfClassError> for CaptureError {
+    #[inline]
+    fn from(source: ElfClassError) -> Self {
+        Self::Class(source)
+    }
+}
+
+impl From<ProcessImageError> for CaptureError {
+    #[inline]
+    fn from(source: ProcessImageError) -> Self {
+        Self::Image(source)
+    }
+}
+
+impl From<UnsupportedLoader> for CaptureError {
+    #[inline]
+    fn from(source: UnsupportedLoader) -> Self {
+        Self::Unsupported(source)
+    }
 }
 
 /// Failure while completing end-to-end loader and module inspection.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, fack::prelude::Error)]
 pub enum InspectionError {
     /// Runtime-linker selection or coherent capture failed.
-    #[error(transparent)]
-    Capture(#[from] CaptureError),
+    #[error(transparent(0))]
+    Capture(CaptureError),
 
     /// Module normalization could not prove unambiguous mapping ownership.
-    #[error(transparent)]
-    Normalize(#[from] NormalizeError),
+    #[error(transparent(0))]
+    Normalize(NormalizeError),
+}
+
+impl From<CaptureError> for InspectionError {
+    #[inline]
+    fn from(source: CaptureError) -> Self {
+        Self::Capture(source)
+    }
+}
+
+impl From<NormalizeError> for InspectionError {
+    #[inline]
+    fn from(source: NormalizeError) -> Self {
+        Self::Normalize(source)
+    }
 }
 
 #[cfg(test)]
