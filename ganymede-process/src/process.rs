@@ -237,7 +237,7 @@ impl Process {
                 (copied_bytes, terminator_offset, copy_status)
             };
             let retained_bytes =
-                terminator_offset.map_or(copied_bytes, |target_offset| target_offset);
+                terminator_offset.unwrap_or(copied_bytes);
 
             bytes.truncate(original_length + retained_bytes);
 
