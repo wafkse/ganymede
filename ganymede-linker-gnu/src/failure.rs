@@ -91,6 +91,10 @@ where
     #[error("GNU loader name at {0:?} is not readable in the retained process snapshot")]
     UnreadableName(catalejo::address::ViAddr),
 
+    /// A loader-provided name reaches its mapped bound without a terminator.
+    #[error("GNU loader name at {0:?} has no terminator inside its mapped bound")]
+    MissingNameTerminator(catalejo::address::ViAddr),
+
     /// Foreign process byte read failed.
     #[error(transparent(0))]
     Read(ReadError),

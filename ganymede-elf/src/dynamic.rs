@@ -9,7 +9,10 @@ extern crate alloc;
 
 use core::{mem, num::NonZeroUsize};
 
-use catalejo::{address::ViAddr, prelude::Lift};
+use catalejo::{
+    address::ViAddr,
+    prelude::{ByteCopyStatus, Lift},
+};
 use ganymede_process::process::{AccessError, Process, ReadError};
 use num_traits::One;
 
@@ -109,14 +112,19 @@ where
 {
     /// Virtual address of the dynamic string table.
     string_table: Option<ClassType::Word>,
+
     /// Declared byte size of the dynamic string table.
     string_size: Option<ClassType::Word>,
+
     /// Virtual address of the dynamic symbol table.
     symbol_table: Option<ClassType::Word>,
+
     /// Declared byte stride of one dynamic symbol record.
     symbol_stride: Option<ClassType::Word>,
+
     /// Virtual address of the System V hash table when present.
     sysv_hash: Option<ClassType::Word>,
+
     /// Virtual address of the GNU hash table when present.
     gnu_hash: Option<ClassType::Word>,
 }
@@ -737,14 +745,71 @@ where
         let name_offset =
             u64::try_from(name_offset).map_err(|_| DynamicSymbolsError::AddressOverflow)?;
         let name_address = Self::add(*string_table, name_offset)?;
-        let name = Process::read_c_string_bytes(target_process, name_address, name_bytes).map_err(
-            |target_error| match target_error {
-                ReadError::MissingTerminator(..) => DynamicSymbolsError::MissingNameTerminator,
-                target_error => DynamicSymbolsError::Read(target_error),
-            },
-        )?;
+        let name = Self::name_bytes(target_process, name_address, name_bytes)?;
 
         Ok(DynamicSymbol::new(target_index, symbol, &name))
+    }
+
+    /// Copy one bounded dynamic string-table name through managed foreign access.
+    fn name_bytes(
+        target_process: &Process,
+        target_address: ViAddr,
+        target_limit: NonZeroUsize,
+    ) -> Result<Vec<u8>, DynamicSymbolsError> {
+        let ViAddr(base_address) = target_address;
+        let limit = target_limit.get();
+        let mut bytes = Vec::new();
+        let mut offset = 0_usize;
+
+        loop {
+            let remaining = limit.saturating_sub(offset);
+            let Some(remaining) = NonZeroUsize::new(remaining) else {
+                break Err(DynamicSymbolsError::MissingNameTerminator);
+            };
+            let offset_value =
+                u64::try_from(offset).map_err(|_| DynamicSymbolsError::AddressOverflow)?;
+            let address = base_address
+                .checked_add(offset_value)
+                .map(ViAddr::new)
+                .ok_or(DynamicSymbolsError::AddressOverflow)?;
+            let foreign = Process::open::<u8>(target_process, address)?;
+            let requested = remaining.get().min(foreign.leftover().get());
+            let original_length = bytes.len();
+            let copy = foreign
+                .append(&mut bytes, requested)
+                .ok_or(AccessError::Unavailable(address))?;
+            let copied = copy.copied();
+            let terminator = copy
+                .bytes()
+                .iter()
+                .position(|target_byte| *target_byte == 0);
+            let status = copy.status();
+            let retained = terminator.unwrap_or(copied);
+
+            bytes.truncate(original_length + retained);
+
+            match (terminator, status) {
+                (Some(_), _) => break Ok(bytes),
+                (None, ByteCopyStatus::Faulted) => {
+                    let fault_offset = offset
+                        .checked_add(copied)
+                        .ok_or(DynamicSymbolsError::AddressOverflow)?;
+                    let fault_offset = u64::try_from(fault_offset)
+                        .map_err(|_| DynamicSymbolsError::AddressOverflow)?;
+                    let fault_address = base_address
+                        .checked_add(fault_offset)
+                        .map(ViAddr::new)
+                        .ok_or(DynamicSymbolsError::AddressOverflow)?;
+
+                    break Err(DynamicSymbolsError::Read(ReadError::Fault(fault_address)));
+                }
+                (None, ByteCopyStatus::Complete) => {
+                    offset = offset
+                        .checked_add(copied)
+                        .ok_or(DynamicSymbolsError::AddressOverflow)?;
+                }
+            }
+        }
     }
 
     /// Validate the preferred available runtime symbol-hash structure.

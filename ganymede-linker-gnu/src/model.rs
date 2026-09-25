@@ -239,21 +239,3 @@ where
         *previous
     }
 }
-
-/// Stable i386 GNU debugger rendezvous observation.
-pub type GnuDebug32 = DebugRecord<crate::abi::Gnu32>;
-
-/// Stable x86-64 GNU debugger rendezvous observation.
-pub type GnuDebug64 = DebugRecord<crate::abi::Gnu64>;
-
-/// Stable i386 GNU extended rendezvous observation.
-pub type GnuDebugExtended32 = ExtendedRecord<crate::abi::Gnu32>;
-
-/// Stable x86-64 GNU extended rendezvous observation.
-pub type GnuDebugExtended64 = ExtendedRecord<crate::abi::Gnu64>;
-
-/// Stable i386 GNU link-map observation.
-pub type GnuLinkMap32 = LinkMapRecord<crate::abi::Gnu32>;
-
-/// Stable x86-64 GNU link-map observation.
-pub type GnuLinkMap64 = LinkMapRecord<crate::abi::Gnu64>;

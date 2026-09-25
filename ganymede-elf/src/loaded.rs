@@ -93,15 +93,14 @@ where
                 }
             })?;
 
-        if actual != expected {
-            return Err(LoadedImageError::ProgramHeaderSize { actual, expected });
-        }
-
         let count = usize::from(header.program_count());
+        let geometry = match (actual == expected, count != 0) {
+            (false, _) => Err(LoadedImageError::ProgramHeaderSize { actual, expected }),
+            (true, false) => Err(LoadedImageError::ProgramHeaderCount),
+            (true, true) => Ok(()),
+        };
 
-        if count == 0 {
-            return Err(LoadedImageError::ProgramHeaderCount);
-        }
+        geometry?;
 
         let program_headers = Self::programs(process, load_bias, &header, count)?;
         let executables = Self::executables(load_bias, &program_headers)?;

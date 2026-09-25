@@ -12,11 +12,6 @@ use catalejo::{
     prelude::{Faultable, Foreign, Target, Unassociated},
 };
 
-pub use crate::snapshot::{
-    Attributes, AuxiliaryVectorEntry, Backing, FileBacking, FileIdentity, Region, Snapshot,
-    SnapshotError,
-};
-
 /// A newtype capable of representing a process identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProcessId(pub u32);

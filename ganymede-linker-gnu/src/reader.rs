@@ -16,7 +16,7 @@ use ganymede_elf::{
     lift::{Dynamic as ElfDynamic, ElfError},
     process::{Observation as ElfObservation, ProcessImage as ElfProcessImage},
 };
-use ganymede_process::process::{AccessError, Process, Snapshot};
+use ganymede_process::process::{AccessError, Process};
 
 use crate::{
     STABLE_READ_LIFTS,
@@ -25,7 +25,7 @@ use crate::{
     error::{AddressOperation, BusyReason, LinkerError, StructureKind},
     failure::SnapshotError,
     model::{DebugRecord, ExtendedRecord, LinkMapRecord},
-    snapshot::{RetryPolicy, model::Snapshot as ModuleSnapshot},
+    snapshot::{RetryPolicy, Snapshot},
 };
 
 mod dynamic;
@@ -64,7 +64,7 @@ type GnuLinkMap<AbiType> = LinkMapRecord<AbiType>;
 /// ELF dynamic-segment width selected by one GNU ABI family.
 type DynamicSize<AbiType> = ElfAddress<AbiType>;
 
-impl<AbiType> ModuleSnapshot<AbiType>
+impl<AbiType> Snapshot<AbiType>
 where
     AbiType: Abi,
     ElfDynamic<AbiType::Elf>:
@@ -76,6 +76,8 @@ where
 {
     /// Capture one coherent GNU loader observation with the standard retry policy.
     ///
+    /// `target_snapshot` must have been captured from `target_process`.
+    ///
     /// # Errors
     ///
     /// Returns [`SnapshotError`] for malformed image or GNU metadata, foreign-access failure, or
@@ -83,7 +85,7 @@ where
     #[inline]
     pub fn capture(
         target_process: &Process,
-        target_snapshot: &Snapshot,
+        target_snapshot: &ganymede_process::snapshot::Snapshot,
     ) -> Result<Self, SnapshotError<AbiType>> {
         Self::with_retry(target_process, target_snapshot, RetryPolicy::standard())
     }
@@ -92,6 +94,7 @@ where
     ///
     /// Target structure sizes and traversal lengths remain governed only by validated format and
     /// protocol geometry. The policy controls repeated complete observations of mutable state.
+    /// `target_snapshot` must have been captured from `target_process`.
     ///
     /// # Errors
     ///
@@ -100,7 +103,7 @@ where
     #[inline]
     pub fn with_retry(
         target_process: &Process,
-        target_snapshot: &Snapshot,
+        target_snapshot: &ganymede_process::snapshot::Snapshot,
         target_retry: RetryPolicy,
     ) -> Result<Self, SnapshotError<AbiType>> {
         let target = Target::new(target_process, target_snapshot);
@@ -141,21 +144,26 @@ where
 }
 
 /// Capability for repeated coherent lifts from one process observation.
+///
+/// The process and snapshot are retained together for consistent use. Their origin relationship is
+/// a caller responsibility inherited from [`Target`].
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): Every lift uses the same process handle and every structural memory bound uses the same kernel snapshot retained for this complete acquisition attempt.
 pub struct Stable<'target> {
     /// Process used for all stable foreign observations.
     process: &'target Process,
 
     /// Kernel mapping snapshot used for structural memory bounds.
-    snapshot: &'target Snapshot,
+    snapshot: &'target ganymede_process::snapshot::Snapshot,
 }
 
 impl<'target> Stable<'target> {
     /// Bind all later stable lifts and memory bounds to one process observation.
     #[inline]
     #[must_use]
-    pub const fn new(target_process: &'target Process, target_snapshot: &'target Snapshot) -> Self {
+    pub const fn new(
+        target_process: &'target Process,
+        target_snapshot: &'target ganymede_process::snapshot::Snapshot,
+    ) -> Self {
         Self {
             process: target_process,
             snapshot: target_snapshot,
@@ -174,7 +182,7 @@ impl<'target> Stable<'target> {
     /// Return the exact kernel snapshot carried by this stability capability.
     #[inline]
     #[must_use]
-    pub const fn snapshot(self) -> &'target Snapshot {
+    pub const fn snapshot(self) -> &'target ganymede_process::snapshot::Snapshot {
         let Self { snapshot, .. } = self;
 
         snapshot
@@ -224,7 +232,6 @@ impl<'target> Stable<'target> {
 
 /// Fixed target used for one all-or-nothing coherent acquisition attempt.
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): `target` fixes one process observation for every operation in this attempt.
 struct Attempt<'target>(
     /// Selected process observation.
     Target<'target>,
@@ -238,7 +245,7 @@ impl<'target> Attempt<'target> {
     }
 
     /// Execute image validation and complete GNU acquisition once.
-    fn run<AbiType>(&self) -> Result<ModuleSnapshot<AbiType>, AttemptError<AbiType>>
+    fn run<AbiType>(&self) -> Result<Snapshot<AbiType>, AttemptError<AbiType>>
     where
         AbiType: Abi,
         ElfDynamic<AbiType::Elf>:
@@ -261,7 +268,7 @@ impl<'target> Attempt<'target> {
     fn finish<AbiType>(
         &self,
         image: &ElfProcessImage<AbiType::Elf>,
-    ) -> Result<ModuleSnapshot<AbiType>, AttemptError<AbiType>>
+    ) -> Result<Snapshot<AbiType>, AttemptError<AbiType>>
     where
         AbiType: Abi,
         ElfDynamic<AbiType::Elf>:
@@ -286,7 +293,7 @@ impl<'target> Attempt<'target> {
         let main_load_bias = *image.load_bias();
         let interpreter = interpreter.finish();
 
-        Ok(ModuleSnapshot::new(
+        Ok(Snapshot::new(
             main_load_bias,
             interpreter,
             debug,
@@ -304,7 +311,7 @@ mod tests {
     use super::*;
     use crate::{
         abi::{DynamicPointer, Gnu32, Gnu64, MapPointer, NamePointer},
-        snapshot::model::Module,
+        snapshot::Module,
     };
 
     fn fixture<AbiType>(

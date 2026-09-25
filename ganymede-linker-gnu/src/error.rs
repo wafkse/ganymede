@@ -24,6 +24,10 @@ pub enum AddressOperation {
     /// Locating one process-resident dynamic entry.
     #[error("locating a dynamic entry")]
     DynamicEntry,
+
+    /// Advancing through one bounded loader-provided module name.
+    #[error("advancing through a module name")]
+    ModuleName,
 }
 
 /// Generated foreign structure category observed by GNU snapshot acquisition.

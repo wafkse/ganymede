@@ -10,8 +10,11 @@ extern crate alloc;
 use alloc::{boxed::Box, vec::Vec};
 use core::mem::MaybeUninit;
 
-use catalejo::{address::ViAddr, ffi};
-use ganymede_process::process::{AccessError, Process, ReadError, Snapshot};
+use catalejo::{address::ViAddr, ffi, prelude::ByteCopyStatus};
+use ganymede_process::{
+    process::{AccessError, Process, ReadError},
+    snapshot::Snapshot,
+};
 use ganymede_text::BytePath;
 use num_traits::{CheckedAdd, CheckedMul, CheckedSub};
 
@@ -107,11 +110,10 @@ where
 
 /// Process-bound ELF image observation for one selected class.
 ///
-/// This capability retains the exact process handle and kernel snapshot used to construct the
-/// validated image. Downstream format consumers can therefore reuse the image without accepting a
-/// separately supplied process or snapshot that could describe another observation context.
+/// This capability retains the process handle and kernel snapshot supplied during construction.
+/// Callers must supply a snapshot captured from that process because process identity is not encoded
+/// in [`Snapshot`].
 #[derive(Debug)]
-// NOTE(invariant): `image` was constructed from exactly `process` and `snapshot` during `read`, and no public constructor can assemble the three fields independently.
 pub struct Observation<'target, ClassType>
 where
     ClassType: Class,
@@ -131,6 +133,8 @@ where
     ClassType: Class,
 {
     /// Read one class-specific ELF image and bind it to its process observation.
+    ///
+    /// The supplied snapshot must have been captured from `target_process`.
     ///
     /// # Errors
     ///
@@ -207,6 +211,9 @@ where
 {
     /// Read and validate the main image described by one process snapshot.
     ///
+    /// The supplied snapshot must have been captured from `target_process`. This relationship is a
+    /// caller responsibility because snapshots do not retain process identity.
+    ///
     /// The runtime class must match `ClassType`. Kernel-widened auxiliary values are narrowed before
     /// program-table arithmetic, so an ELF32 image cannot accidentally inherit observer-width
     /// calculations.
@@ -248,7 +255,7 @@ where
             .try_into()
             .map_err(|_| ProcessImageError::InvalidInterpreterSize(interpreter_size.into()))?;
         let interpreter_bytes =
-            Process::read_bytes(target_process, interpreter_address, interpreter_count)?;
+            Self::interpreter_bytes(target_process, interpreter_address, interpreter_count)?;
         let interpreter = Self::path(&interpreter_bytes)?;
         let program_headers = program_headers.into_boxed_slice();
 
@@ -346,19 +353,15 @@ where
             .ok_or(ProcessImageError::InvalidClassLayout(ClassType::CLASS))?;
         let stride_valid = target_stride == expected_stride;
 
-        if !count_valid {
-            return Err(ProcessImageError::InvalidProgramHeaderCount(
+        match (count_valid, stride_valid) {
+            (false, _) => Err(ProcessImageError::InvalidProgramHeaderCount(
                 target_count.into(),
-            ));
-        }
-
-        if !stride_valid {
-            return Err(ProcessImageError::InvalidProgramHeaderSize(
+            )),
+            (true, false) => Err(ProcessImageError::InvalidProgramHeaderSize(
                 target_stride.into(),
-            ));
+            )),
+            (true, true) => Ok(()),
         }
-
-        Ok(())
     }
 
     /// Copy the validated process-resident program-header table into matching raw records.
@@ -470,23 +473,23 @@ where
         let interpreter_size_valid =
             interpreter_size_host.is_some_and(|target_size| target_size != 0);
         let interpreter_memory_valid = interpreter_size <= interpreter_memory;
-
-        if !interpreter_size_valid {
-            return Err(ProcessImageError::InvalidInterpreterSize(
-                interpreter_size.into(),
-            ));
-        }
-
-        if !interpreter_memory_valid {
-            return Err(ProcessImageError::InterpreterFileSizeExceedsMemory);
-        }
-
         let (dynamic_virtual, dynamic_file_size, dynamic_size) =
             dynamic_segment.ok_or(ProcessImageError::MissingDynamicSegment)?;
+        let dynamic_memory_valid = dynamic_file_size <= dynamic_size;
+        let geometry = match (
+            interpreter_size_valid,
+            interpreter_memory_valid,
+            dynamic_memory_valid,
+        ) {
+            (false, _, _) => Err(ProcessImageError::InvalidInterpreterSize(
+                interpreter_size.into(),
+            )),
+            (true, false, _) => Err(ProcessImageError::InterpreterFileSizeExceedsMemory),
+            (true, true, false) => Err(ProcessImageError::DynamicFileSizeExceedsMemory),
+            (true, true, true) => Ok(()),
+        };
 
-        if dynamic_file_size > dynamic_size {
-            return Err(ProcessImageError::DynamicFileSizeExceedsMemory);
-        }
+        geometry?;
 
         let load_bias = LoadBias::<ClassType>::new(load_bias_value);
         let interpreter_address =
@@ -512,6 +515,67 @@ where
             interpreter_size,
             dynamic,
         })
+    }
+
+    /// Copy the validated interpreter payload through managed foreign access.
+    fn interpreter_bytes(
+        target_process: &Process,
+        target_address: ViAddr,
+        target_count: usize,
+    ) -> Result<Vec<u8>, ProcessImageError> {
+        let ViAddr(base_address) = target_address;
+        let mut bytes = Vec::with_capacity(target_count);
+        let mut offset = 0_usize;
+
+        while offset < target_count {
+            let offset_value = u64::try_from(offset)
+                .map_err(|_| ProcessImageError::AddressOverflow(AddressOperation::Interpreter))?;
+            let address = base_address
+                .checked_add(offset_value)
+                .map(ViAddr::new)
+                .ok_or(ProcessImageError::AddressOverflow(
+                    AddressOperation::Interpreter,
+                ))?;
+            let foreign = Process::open::<u8>(target_process, address).map_err(ReadError::from)?;
+            let remaining = target_count.saturating_sub(offset);
+            let requested = remaining.min(foreign.leftover().get());
+            let copy = foreign
+                .append(&mut bytes, requested)
+                .ok_or_else(|| ReadError::from(AccessError::Unavailable(address)))?;
+            let copied = copy.copied();
+
+            match copy.status() {
+                ByteCopyStatus::Complete => {
+                    offset =
+                        offset
+                            .checked_add(copied)
+                            .ok_or(ProcessImageError::AddressOverflow(
+                                AddressOperation::Interpreter,
+                            ))?;
+                }
+                ByteCopyStatus::Faulted => {
+                    let fault_offset =
+                        offset
+                            .checked_add(copied)
+                            .ok_or(ProcessImageError::AddressOverflow(
+                                AddressOperation::Interpreter,
+                            ))?;
+                    let fault_offset = u64::try_from(fault_offset).map_err(|_| {
+                        ProcessImageError::AddressOverflow(AddressOperation::Interpreter)
+                    })?;
+                    let fault_address = base_address
+                        .checked_add(fault_offset)
+                        .map(ViAddr::new)
+                        .ok_or(ProcessImageError::AddressOverflow(
+                            AddressOperation::Interpreter,
+                        ))?;
+
+                    return Err(ProcessImageError::Read(ReadError::Fault(fault_address)));
+                }
+            }
+        }
+
+        Ok(bytes)
     }
 
     /// Validate the exact interpreter payload and retain path bytes without its final NUL.

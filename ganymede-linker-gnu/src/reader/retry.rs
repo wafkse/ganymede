@@ -5,7 +5,7 @@
 
 use core::num::NonZeroUsize;
 
-use super::{Abi, ModuleSnapshot, SnapshotError};
+use super::{Abi, Snapshot, SnapshotError};
 use crate::error::{BusyReason, InconsistentReason};
 
 /// Failure classification for one complete snapshot attempt.
@@ -72,7 +72,6 @@ where
 
 /// Nonzero complete-attempt retry budget.
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): The retained attempt budget is nonzero, so exhaustion after only retryable outcomes always retains a final outcome.
 pub struct Retry(NonZeroUsize);
 
 impl Retry {
@@ -87,8 +86,8 @@ impl Retry {
     #[inline]
     pub fn run<AbiType>(
         self,
-        mut target_attempt: impl FnMut() -> Result<ModuleSnapshot<AbiType>, AttemptError<AbiType>>,
-    ) -> Result<ModuleSnapshot<AbiType>, SnapshotError<AbiType>>
+        mut target_attempt: impl FnMut() -> Result<Snapshot<AbiType>, AttemptError<AbiType>>,
+    ) -> Result<Snapshot<AbiType>, SnapshotError<AbiType>>
     where
         AbiType: Abi,
     {

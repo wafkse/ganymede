@@ -7,20 +7,20 @@
 extern crate alloc;
 
 use alloc::{collections::BTreeSet, vec::Vec};
-use catalejo::peephole::Coherent;
+use catalejo::{peephole::Coherent, prelude::ByteCopyStatus};
 use core::num::NonZeroUsize;
 
 use ganymede_text::BytePath;
 
 use super::{
-    Abi, AttemptError, BusyReason, GnuLinkMap, LinkerError, Process, RawMap, SnapshotError, Stable,
-    StructureKind, ViAddr,
+    Abi, AccessError, AttemptError, BusyReason, GnuLinkMap, LinkerError, Process, RawMap,
+    SnapshotError, Stable, StructureKind, ViAddr,
 };
 use crate::{
     abi::{ElfAddress, MapPointer},
     acquire::Walk,
     error::InconsistentReason,
-    snapshot::model::Module,
+    snapshot::Module,
 };
 
 /// One validated forward-walk position pairing its public module with the stable ABI node.
@@ -104,6 +104,68 @@ where
         })
     }
 
+    /// Copy one bounded loader-provided name through managed foreign access.
+    fn name_bytes(
+        target_process: &Process,
+        target_address: ViAddr,
+        target_limit: NonZeroUsize,
+    ) -> Result<Vec<u8>, SnapshotError<AbiType>> {
+        let ViAddr(base_address) = target_address;
+        let limit = target_limit.get();
+        let mut bytes = Vec::new();
+        let mut offset = 0_usize;
+
+        loop {
+            let remaining = limit.saturating_sub(offset);
+            let Some(remaining) = NonZeroUsize::new(remaining) else {
+                break Err(SnapshotError::MissingNameTerminator(target_address));
+            };
+            let offset_value = u64::try_from(offset).map_err(|_| {
+                SnapshotError::AddressOverflow(crate::error::AddressOperation::ModuleName)
+            })?;
+            let address = base_address
+                .checked_add(offset_value)
+                .map(ViAddr::new)
+                .ok_or(SnapshotError::AddressOverflow(
+                    crate::error::AddressOperation::ModuleName,
+                ))?;
+            let foreign = Process::open::<u8>(target_process, address).map_err(|target_error| {
+                match target_error {
+                    AccessError::Io(target_error) => SnapshotError::Io(target_error),
+                    AccessError::Unavailable(..) => SnapshotError::UnreadableName(address),
+                }
+            })?;
+            let requested = remaining.get().min(foreign.leftover().get());
+            let original_length = bytes.len();
+            let copy = foreign
+                .append(&mut bytes, requested)
+                .ok_or(SnapshotError::UnreadableName(address))?;
+            let copied = copy.copied();
+            let terminator = copy
+                .bytes()
+                .iter()
+                .position(|target_byte| *target_byte == 0);
+            let status = copy.status();
+            let retained = terminator.unwrap_or(copied);
+
+            bytes.truncate(original_length + retained);
+
+            match (terminator, status) {
+                (Some(_), _) => break Ok(bytes),
+                (None, ByteCopyStatus::Faulted) => {
+                    break Err(SnapshotError::UnreadableName(address));
+                }
+                (None, ByteCopyStatus::Complete) => {
+                    offset = offset
+                        .checked_add(copied)
+                        .ok_or(SnapshotError::AddressOverflow(
+                            crate::error::AddressOperation::ModuleName,
+                        ))?;
+                }
+            }
+        }
+    }
+
     /// Require the expected reverse edge.
     fn previous(self, target_expected: MapPointer<AbiType>) -> Result<Self, AttemptError<AbiType>> {
         let Self { map, node, .. } = self;
@@ -135,8 +197,7 @@ where
             .readable_bytes(name_address)
             .and_then(NonZeroUsize::new)
             .ok_or(SnapshotError::UnreadableName(name_address))?;
-        let name = Process::read_c_string_bytes(target_stable.process(), name_address, name_bytes)
-            .map_err(SnapshotError::from)?;
+        let name = Self::name_bytes(target_stable.process(), name_address, name_bytes)?;
         let after = target_stable.lift::<AbiType, RawMap<AbiType>, GnuLinkMap<AbiType>>(
             address,
             StructureKind::LinkMap,

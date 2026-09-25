@@ -59,32 +59,19 @@ mod reader;
 
 pub mod failure;
 
-pub mod gnu32;
-
-pub mod gnu64;
-
 pub mod snapshot;
 
-pub mod snapshot32;
-
 pub mod prelude {
-    //! Convenience imports for GNU runtime-linker inspection.
+    //! This is the `ganymede-linker-gnu` prelude.
     //!
-    //! This module groups the commonly composed protocol and snapshot concepts behind one import
-    //! path. It adds no loader policy and does not collapse architecture-specific representations.
+    //! It re-exports the generic GNU ABI, observation, snapshot, and failure concepts without
+    //! selecting one target width or introducing convenience aliases.
 
-    pub use crate::abi::{Abi, Gnu32, Gnu64};
-    pub use crate::error::LinkerError;
-    pub use crate::gnu32::{GnuDebug32, GnuDebugExtended32, GnuLinkMap32};
-    pub use crate::gnu64::{GnuDebug64, GnuDebugExtended64, GnuLinkMap64};
-    pub use crate::snapshot::{
-        AddressOperation, BytePath, Module, ModuleSnapshot, Namespace, Rendezvous, RetryPolicy,
-        SnapshotError,
-    };
-    pub use crate::snapshot32::{
-        BusyReason as BusyReason32, GNU_I386_INTERPRETER_BASENAME,
-        InconsistentReason as InconsistentReason32, Module as Module32,
-        ModuleSnapshot as ModuleSnapshot32, Namespace as Namespace32, Rendezvous as Rendezvous32,
-        SnapshotError as SnapshotError32, StructureKind as StructureKind32,
+    pub use crate::{
+        abi::{Abi, GNU_EXTENDED_PROTOCOL_VERSION, Gnu32, Gnu64},
+        error::{AddressOperation, BusyReason, InconsistentReason, LinkerError, StructureKind},
+        failure::SnapshotError,
+        model::{DebugRecord, ExtendedRecord, LinkMapRecord},
+        snapshot::{Module, Namespace, Rendezvous, RetryPolicy, Snapshot},
     };
 }

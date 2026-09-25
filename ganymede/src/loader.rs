@@ -8,9 +8,12 @@ use ganymede_elf::{
     class::{ElfClass, ElfClassError},
     process::{Elf32Observation, Elf64Observation, ProcessImageError},
 };
-use ganymede_linker_gnu::{snapshot, snapshot32};
+use ganymede_linker_gnu::{
+    abi::{Abi, Gnu32, Gnu64},
+    failure, snapshot,
+};
 use ganymede_module::{Modules, NormalizeError};
-use ganymede_process::process::{Process, Snapshot as ProcessSnapshot};
+use ganymede_process::process::Process;
 use ganymede_text::BytePath;
 
 /// Supported runtime-linker profile selected from ELF class and interpreter identity.
@@ -41,12 +44,12 @@ impl Loader {
         let basename = target_interpreter.basename();
         let selected = match target_class {
             ElfClass::Elf32 => {
-                let is_gnu = basename == snapshot32::GNU_I386_INTERPRETER_BASENAME;
+                let is_gnu = basename == Gnu32::INTERPRETER_BASENAME;
 
                 is_gnu.then_some(Self::Gnu32)
             }
             ElfClass::Elf64 => {
-                let is_gnu = basename == snapshot::GNU_X86_64_INTERPRETER_BASENAME;
+                let is_gnu = basename == Gnu64::INTERPRETER_BASENAME;
 
                 is_gnu.then_some(Self::Gnu64)
             }
@@ -101,14 +104,16 @@ impl UnsupportedLoader {
 #[derive(Debug)]
 pub enum Snapshot {
     /// Coherent GNU i386 snapshot retaining 32-bit foreign pointer identity.
-    Gnu32(snapshot32::ModuleSnapshot),
+    Gnu32(snapshot::Snapshot<Gnu32>),
 
     /// Coherent GNU x86-64 snapshot retaining 64-bit foreign pointer identity.
-    Gnu64(snapshot::ModuleSnapshot),
+    Gnu64(snapshot::Snapshot<Gnu64>),
 }
 
 impl Snapshot {
     /// Capture a supported runtime-linker snapshot with the standard retry policy.
+    ///
+    /// `target_snapshot` must have been captured from `target_process`.
     ///
     /// # Errors
     ///
@@ -117,7 +122,7 @@ impl Snapshot {
     #[inline]
     pub fn capture(
         target_process: &Process,
-        target_snapshot: &ProcessSnapshot,
+        target_snapshot: &ganymede_process::snapshot::Snapshot,
     ) -> Result<Self, CaptureError> {
         Self::with_retry(
             target_process,
@@ -130,6 +135,7 @@ impl Snapshot {
     ///
     /// Target structure acceptance remains governed by format and protocol invariants. The supplied
     /// policy controls only repeated complete observations of mutable runtime-linker state.
+    /// `target_snapshot` must have been captured from `target_process`.
     ///
     /// # Errors
     ///
@@ -138,7 +144,7 @@ impl Snapshot {
     #[inline]
     pub fn with_retry(
         target_process: &Process,
-        target_snapshot: &ProcessSnapshot,
+        target_snapshot: &ganymede_process::snapshot::Snapshot,
         target_retry: snapshot::RetryPolicy,
     ) -> Result<Self, CaptureError> {
         let class = ElfClass::from_snapshot(target_snapshot)?;
@@ -159,7 +165,7 @@ impl Snapshot {
     /// Read one class-specific ELF observation and enter only its validated GNU backend.
     fn read(
         target_process: &Process,
-        target_snapshot: &ProcessSnapshot,
+        target_snapshot: &ganymede_process::snapshot::Snapshot,
         target_class: ElfClass,
         target_retry: snapshot::RetryPolicy,
     ) -> Result<Self, CaptureError> {
@@ -168,7 +174,7 @@ impl Snapshot {
                 let observation = Elf32Observation::read(target_process, target_snapshot)?;
                 Loader::select(target_class, observation.image().interpreter())?;
 
-                snapshot32::ModuleSnapshot::prepared_with_retry(&observation, target_retry)
+                snapshot::Snapshot::<Gnu32>::prepared_with_retry(&observation, target_retry)
                     .map(Self::Gnu32)
                     .map_err(CaptureError::Gnu32)
             }
@@ -176,7 +182,7 @@ impl Snapshot {
                 let observation = Elf64Observation::read(target_process, target_snapshot)?;
                 Loader::select(target_class, observation.image().interpreter())?;
 
-                snapshot::ModuleSnapshot::prepared_with_retry(&observation, target_retry)
+                snapshot::Snapshot::<Gnu64>::prepared_with_retry(&observation, target_retry)
                     .map(Self::Gnu64)
                     .map_err(CaptureError::Gnu64)
             }
@@ -184,10 +190,13 @@ impl Snapshot {
     }
 
     /// Normalize all modules using the same process snapshot supplied to facade acquisition.
-    fn normalize(&self, target_snapshot: &ProcessSnapshot) -> Result<Modules, NormalizeError> {
+    fn normalize(
+        &self,
+        target_snapshot: &ganymede_process::snapshot::Snapshot,
+    ) -> Result<Modules, NormalizeError> {
         match self {
-            Self::Gnu32(target_snapshot32) => target_snapshot32.normalize(target_snapshot),
-            Self::Gnu64(target_snapshot64) => target_snapshot64.normalize(target_snapshot),
+            Self::Gnu32(target_loader) => target_loader.normalize(target_snapshot),
+            Self::Gnu64(target_loader) => target_loader.normalize(target_snapshot),
         }
     }
 }
@@ -206,6 +215,8 @@ pub struct Inspection {
 impl Inspection {
     /// Capture loader state and normalize its modules under architecture defaults.
     ///
+    /// `target_snapshot` must have been captured from `target_process`.
+    ///
     /// # Errors
     ///
     /// This returns [`InspectionError`] when loader capture fails or normalized mapping ownership
@@ -213,7 +224,7 @@ impl Inspection {
     #[inline]
     pub fn capture(
         target_process: &Process,
-        target_snapshot: &ProcessSnapshot,
+        target_snapshot: &ganymede_process::snapshot::Snapshot,
     ) -> Result<Self, InspectionError> {
         let snapshot = Snapshot::capture(target_process, target_snapshot)?;
 
@@ -222,6 +233,8 @@ impl Inspection {
 
     /// Capture loader state and normalize modules under a caller-selected retry policy.
     ///
+    /// `target_snapshot` must have been captured from `target_process`.
+    ///
     /// # Errors
     ///
     /// This returns the same failure categories as [`Self::capture`] with the supplied policy used
@@ -229,7 +242,7 @@ impl Inspection {
     #[inline]
     pub fn with_retry(
         target_process: &Process,
-        target_snapshot: &ProcessSnapshot,
+        target_snapshot: &ganymede_process::snapshot::Snapshot,
         target_retry: snapshot::RetryPolicy,
     ) -> Result<Self, InspectionError> {
         let snapshot = Snapshot::with_retry(target_process, target_snapshot, target_retry)?;
@@ -267,7 +280,7 @@ impl Inspection {
     /// Bind normalized modules to the exact loader snapshot that produced them.
     fn finish(
         snapshot: Snapshot,
-        target_snapshot: &ProcessSnapshot,
+        target_snapshot: &ganymede_process::snapshot::Snapshot,
     ) -> Result<Self, InspectionError> {
         let modules = snapshot.normalize(target_snapshot)?;
 
@@ -293,12 +306,12 @@ pub enum CaptureError {
     /// GNU i386 coherent acquisition failed after loader selection.
     #[error("GNU i386 snapshot acquisition failed")]
     #[error(source(0))]
-    Gnu32(snapshot32::SnapshotError),
+    Gnu32(failure::SnapshotError<Gnu32>),
 
     /// GNU x86-64 coherent acquisition failed after loader selection.
     #[error("GNU x86-64 snapshot acquisition failed")]
     #[error(source(0))]
-    Gnu64(snapshot::SnapshotError),
+    Gnu64(failure::SnapshotError<Gnu64>),
 }
 
 impl From<ElfClassError> for CaptureError {

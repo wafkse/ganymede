@@ -13,7 +13,7 @@ extern crate alloc;
 use alloc::{boxed::Box, vec::Vec};
 
 use catalejo::address::ViAddr;
-use ganymede_process::process::{Backing, FileIdentity, Region, Snapshot};
+use ganymede_process::snapshot::{Backing, FileIdentity, Region, Snapshot};
 use ganymede_text::BytePath;
 
 /// Format-neutral observation of one loaded image.
@@ -288,10 +288,9 @@ pub enum NormalizeError {
 }
 
 pub mod prelude {
-    //! Convenience imports for normalized loaded-module observations.
+    //! This is the `ganymede-module` prelude.
     //!
-    //! This module exposes only format-neutral module and mapping concepts. Backend protocol types
-    //! remain in their originating crates and must cross this boundary through validated inputs.
+    //! It re-exports format-neutral module and mapping concepts without backend protocol types.
 
     pub use crate::{Module, Modules, NormalizeError};
 }

@@ -4,12 +4,11 @@
 mod tests {
     //! Pure loader-selection coverage plus an opt-in live self-process path.
 
-    use catalejo::prelude::Subsystem;
-    use ganymede::{
-        elf::class::ElfClass,
-        prelude::{Inspection, Loader, Process, ProcessId, RetryPolicy},
-        text::BytePath,
-    };
+    use ganymede::prelude::{Inspection, Loader};
+    use ganymede_elf::class::ElfClass;
+    use ganymede_linker_gnu::snapshot::RetryPolicy;
+    use ganymede_process::process::{Process, ProcessId};
+    use ganymede_text::BytePath;
 
     #[test]
     fn prelude_and_subcrate_paths_compose_for_gnu_selection() {
@@ -19,7 +18,7 @@ mod tests {
         let retry = RetryPolicy::standard();
 
         assert_eq!(loader, Loader::Gnu64);
-        assert_eq!(retry, ganymede::gnu::snapshot::RetryPolicy::standard());
+        assert_eq!(retry, RetryPolicy::standard());
     }
 
     #[test]
@@ -33,12 +32,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an updated mirilla kernel module and exclusive Catalejo signal initialization"]
+    #[ignore = "requires a loaded Mirilla kernel module"]
     fn self_process_reaches_normalized_modules() {
-        // SAFETY: This opt-in test installs no competing SIGBUS, SIGSEGV, or SIGILL handlers. Its
-        // ignore contract requires running it in an environment where Catalejo owns initialization.
-        unsafe { Subsystem::initialize() }.expect("Catalejo fault subsystem should initialize");
-
         let process = Process::new(ProcessId(std::process::id()))
             .expect("self process should engage through Mirilla");
         let process_snapshot = process

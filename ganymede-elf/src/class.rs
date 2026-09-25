@@ -7,7 +7,7 @@
 use core::{fmt, hash::Hash};
 
 use catalejo::{ffi, pointer::Address, prelude::Unassociated};
-use ganymede_process::process::Snapshot;
+use ganymede_process::snapshot::Snapshot;
 use num_traits::{PrimInt, Unsigned};
 
 use crate::binding;

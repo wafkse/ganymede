@@ -7,7 +7,8 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 
-use ganymede_process::process::{Process, ReadError};
+use catalejo::prelude::ByteCopyStatus;
+use ganymede_process::process::{AccessError, Process, ReadError};
 
 use crate::{
     binding,
@@ -92,7 +93,7 @@ impl GnuBuildId {
             let address = load_bias
                 .address(program_header.address())
                 .ok_or(BuildIdError::AddressOverflow)?;
-            let bytes = process.read_bytes(address, size)?;
+            let bytes = Self::segment_bytes(process, address, size)?;
             let segment = Notes::new(&bytes);
 
             for descriptor in segment {
@@ -107,6 +108,55 @@ impl GnuBuildId {
         let bytes = build_id.ok_or(BuildIdError::Missing)?;
 
         Self::new(bytes)
+    }
+
+    /// Copy one complete validated note segment through managed foreign access.
+    fn segment_bytes(
+        target_process: &Process,
+        target_address: catalejo::address::ViAddr,
+        target_size: usize,
+    ) -> Result<Vec<u8>, BuildIdError> {
+        let catalejo::address::ViAddr(base_address) = target_address;
+        let mut bytes = Vec::with_capacity(target_size);
+        let mut offset = 0_usize;
+
+        while offset < target_size {
+            let offset_value = u64::try_from(offset).map_err(|_| BuildIdError::AddressOverflow)?;
+            let address = base_address
+                .checked_add(offset_value)
+                .map(catalejo::address::ViAddr::new)
+                .ok_or(BuildIdError::AddressOverflow)?;
+            let foreign = Process::open::<u8>(target_process, address).map_err(ReadError::from)?;
+            let remaining = target_size.saturating_sub(offset);
+            let requested = remaining.min(foreign.leftover().get());
+            let copy = foreign
+                .append(&mut bytes, requested)
+                .ok_or_else(|| ReadError::from(AccessError::Unavailable(address)))?;
+            let copied = copy.copied();
+
+            match copy.status() {
+                ByteCopyStatus::Complete => {
+                    offset = offset
+                        .checked_add(copied)
+                        .ok_or(BuildIdError::AddressOverflow)?;
+                }
+                ByteCopyStatus::Faulted => {
+                    let fault_offset = offset
+                        .checked_add(copied)
+                        .ok_or(BuildIdError::AddressOverflow)?;
+                    let fault_offset =
+                        u64::try_from(fault_offset).map_err(|_| BuildIdError::AddressOverflow)?;
+                    let fault_address = base_address
+                        .checked_add(fault_offset)
+                        .map(catalejo::address::ViAddr::new)
+                        .ok_or(BuildIdError::AddressOverflow)?;
+
+                    return Err(BuildIdError::Read(ReadError::Fault(fault_address)));
+                }
+            }
+        }
+
+        Ok(bytes)
     }
 
     /// Borrow the exact descriptor bytes.

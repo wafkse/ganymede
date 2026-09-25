@@ -90,6 +90,76 @@ pub enum ElfSymbolVisibility {
     Other(u8),
 }
 
+/// Packed ELF `st_info` byte at the generated record boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SymbolInformation(u8);
+
+impl SymbolInformation {
+    /// Number of low bits occupied by the symbol type.
+    const TYPE_BITS: u32 = 4;
+
+    /// Mask selecting the symbol type from `st_info`.
+    const TYPE_MASK: u8 = 0x0f;
+
+    /// Decode the ELF symbol binding.
+    #[inline]
+    const fn binding(self) -> ElfSymbolBinding {
+        let Self(information) = self;
+        let binding = information >> Self::TYPE_BITS;
+
+        match binding {
+            0 => ElfSymbolBinding::Local,
+            1 => ElfSymbolBinding::Global,
+            2 => ElfSymbolBinding::Weak,
+            10 => ElfSymbolBinding::GnuUnique,
+            other => ElfSymbolBinding::Other(other),
+        }
+    }
+
+    /// Decode the ELF symbol type.
+    #[inline]
+    const fn symbol_type(self) -> ElfSymbolType {
+        let Self(information) = self;
+        let symbol_type = information & Self::TYPE_MASK;
+
+        match symbol_type {
+            0 => ElfSymbolType::None,
+            1 => ElfSymbolType::Object,
+            2 => ElfSymbolType::Function,
+            3 => ElfSymbolType::Section,
+            4 => ElfSymbolType::File,
+            5 => ElfSymbolType::Common,
+            6 => ElfSymbolType::ThreadLocal,
+            10 => ElfSymbolType::GnuIndirectFunction,
+            other => ElfSymbolType::Other(other),
+        }
+    }
+}
+
+/// Packed ELF `st_other` byte at the generated record boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SymbolVisibility(u8);
+
+impl SymbolVisibility {
+    /// Mask selecting the ELF visibility field from `st_other`.
+    const MASK: u8 = 0x03;
+
+    /// Decode the ELF symbol visibility.
+    #[inline]
+    const fn visibility(self) -> ElfSymbolVisibility {
+        let Self(other) = self;
+        let visibility = other & Self::MASK;
+
+        match visibility {
+            0 => ElfSymbolVisibility::Default,
+            1 => ElfSymbolVisibility::Internal,
+            2 => ElfSymbolVisibility::Hidden,
+            3 => ElfSymbolVisibility::Protected,
+            other => ElfSymbolVisibility::Other(other),
+        }
+    }
+}
+
 /// Runtime location semantics derived from one class-preserving ELF symbol definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolLocation<ClassType>
@@ -126,10 +196,10 @@ where
     name_offset: u32,
 
     /// Packed binding and type byte.
-    information: u8,
+    information: SymbolInformation,
 
     /// Packed visibility byte.
-    other: u8,
+    visibility: SymbolVisibility,
 
     /// Raw section index from the symbol record.
     section_index: u16,
@@ -157,8 +227,8 @@ where
     ) -> Self {
         Self {
             name_offset,
-            information,
-            other,
+            information: SymbolInformation(information),
+            visibility: SymbolVisibility(other),
             section_index,
             value,
             size,
@@ -179,15 +249,8 @@ where
     #[must_use]
     pub const fn binding(&self) -> ElfSymbolBinding {
         let Self { information, .. } = self;
-        let binding = *information >> 4;
 
-        match binding {
-            0 => ElfSymbolBinding::Local,
-            1 => ElfSymbolBinding::Global,
-            2 => ElfSymbolBinding::Weak,
-            10 => ElfSymbolBinding::GnuUnique,
-            other => ElfSymbolBinding::Other(other),
-        }
+        information.binding()
     }
 
     /// Classify the symbol type.
@@ -195,35 +258,17 @@ where
     #[must_use]
     pub const fn symbol_type(&self) -> ElfSymbolType {
         let Self { information, .. } = self;
-        let symbol_type = *information & 0x0f;
 
-        match symbol_type {
-            0 => ElfSymbolType::None,
-            1 => ElfSymbolType::Object,
-            2 => ElfSymbolType::Function,
-            3 => ElfSymbolType::Section,
-            4 => ElfSymbolType::File,
-            5 => ElfSymbolType::Common,
-            6 => ElfSymbolType::ThreadLocal,
-            10 => ElfSymbolType::GnuIndirectFunction,
-            other => ElfSymbolType::Other(other),
-        }
+        information.symbol_type()
     }
 
     /// Classify symbol visibility.
     #[inline]
     #[must_use]
     pub const fn visibility(&self) -> ElfSymbolVisibility {
-        let Self { other, .. } = self;
-        let visibility = *other & 0x03;
+        let Self { visibility, .. } = self;
 
-        match visibility {
-            0 => ElfSymbolVisibility::Default,
-            1 => ElfSymbolVisibility::Internal,
-            2 => ElfSymbolVisibility::Hidden,
-            3 => ElfSymbolVisibility::Protected,
-            other => ElfSymbolVisibility::Other(other),
-        }
+        visibility.visibility()
     }
 
     /// Return the raw section index.

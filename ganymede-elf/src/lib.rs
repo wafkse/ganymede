@@ -43,10 +43,9 @@ pub mod process;
 pub mod symbol;
 
 pub mod prelude {
-    //! Convenience imports for ELF interpretation.
+    //! This is the `ganymede-elf` prelude.
     //!
-    //! The prelude exposes runtime class proof, compile-time class families, validated process
-    //! images, symbol semantics, and structurally bounded dynamic lookup without erasing target-width identity.
+    //! It re-exports class proofs, validated images, symbol semantics, and dynamic lookup types.
 
     pub use crate::{
         class::{Class, Elf32, Elf64, ElfClass, ElfClassError, Header, ProgramHeader, Word},

@@ -29,6 +29,9 @@ mod detail {
     impl Abi for super::Gnu64 {}
 }
 
+/// First GNU rendezvous protocol version with `r_debug_extended`.
+pub const GNU_EXTENDED_PROTOCOL_VERSION: core::ffi::c_int = 2;
+
 /// GNU i386 ABI family.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Gnu32;

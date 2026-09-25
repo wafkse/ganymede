@@ -8,24 +8,14 @@
 #![deny(missing_docs)]
 #![deny(clippy::missing_docs_in_private_items)]
 
-pub use ganymede_elf as elf;
-pub use ganymede_linker_gnu as gnu;
-pub use ganymede_module as module;
-pub use ganymede_process as process;
-pub use ganymede_text as text;
-
 pub mod loader;
 
 pub mod prelude {
-    //! Convenience imports for end-to-end process and loader inspection.
+    //! This is the `ganymede` prelude.
     //!
-    //! The prelude keeps the process snapshot distinct from the runtime-linker snapshot while
-    //! exposing the GNU retry policy and normalized module collection used by the facade.
+    //! It re-exports end-to-end inspection types while keeping process and linker snapshots distinct.
 
     pub use crate::loader::{
         CaptureError, Inspection, InspectionError, Loader, Snapshot, UnsupportedLoader,
     };
-    pub use ganymede_linker_gnu::snapshot::RetryPolicy;
-    pub use ganymede_module::{Module, Modules};
-    pub use ganymede_process::process::{Process, ProcessId, Snapshot as ProcessSnapshot};
 }

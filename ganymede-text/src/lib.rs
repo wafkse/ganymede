@@ -15,7 +15,6 @@ use core::{ops::Deref, str};
 
 /// Owned path bytes with no required text encoding.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// NOTE(invariant): The exact input bytes are retained without normalization or encoding conversion.
 pub struct BytePath(Box<[u8]>);
 
 impl BytePath {
@@ -164,10 +163,9 @@ impl<'text> MaybeAscii<'text> {
 }
 
 pub mod prelude {
-    //! Convenience imports for representation-preserving byte text.
+    //! This is the `ganymede-text` prelude.
     //!
-    //! This module groups the crate's commonly used text-view boundary behind one import path. It
-    //! introduces no encoding policy and leaves the original byte representation authoritative.
+    //! It re-exports the byte-preserving path and optional text view types.
 
     pub use crate::{BytePath, MaybeAscii, MaybeUtf8};
 }

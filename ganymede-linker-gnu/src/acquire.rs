@@ -6,12 +6,14 @@
 extern crate alloc;
 
 use alloc::{boxed::Box, vec::Vec};
-use ganymede_process::process::{Process, Snapshot};
+use ganymede_process::{process::Process, snapshot::Snapshot};
 use ganymede_text::BytePath;
 
 /// Process observation context shared by one complete GNU snapshot attempt.
+///
+/// The caller must supply a snapshot captured from `process`. The process crate does not encode
+/// that relationship in the snapshot representation.
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): `process` and `snapshot` are caller-provided views of the same selected target for the complete attempt.
 pub struct Target<'target> {
     /// Attached process used for foreign reads.
     process: &'target Process,
@@ -22,6 +24,8 @@ pub struct Target<'target> {
 
 impl<'target> Target<'target> {
     /// Bind one process handle and kernel snapshot to a complete acquisition attempt.
+    ///
+    /// `target_snapshot` must have been captured from `target_process`.
     #[inline]
     #[must_use]
     pub const fn new(target_process: &'target Process, target_snapshot: &'target Snapshot) -> Self {
@@ -84,7 +88,7 @@ impl Interpreter {
 pub struct Walk<AbiType>(
     /// Forward-order paired observations.
     Vec<(
-        crate::snapshot::model::Module<AbiType>,
+        crate::snapshot::Module<AbiType>,
         crate::model::LinkMapRecord<AbiType>,
     )>,
 )
@@ -100,7 +104,7 @@ where
     #[must_use]
     pub const fn new(
         target_steps: Vec<(
-            crate::snapshot::model::Module<AbiType>,
+            crate::snapshot::Module<AbiType>,
             crate::model::LinkMapRecord<AbiType>,
         )>,
     ) -> Self {
@@ -113,7 +117,7 @@ where
         &self,
     ) -> impl DoubleEndedIterator<
         Item = (
-            &crate::snapshot::model::Module<AbiType>,
+            &crate::snapshot::Module<AbiType>,
             &crate::model::LinkMapRecord<AbiType>,
         ),
     > {
@@ -127,7 +131,7 @@ where
     /// Consume the proof and retain only public module observations.
     #[inline]
     #[must_use]
-    pub fn finish(self) -> Box<[crate::snapshot::model::Module<AbiType>]> {
+    pub fn finish(self) -> Box<[crate::snapshot::Module<AbiType>]> {
         let Self(steps) = self;
 
         steps

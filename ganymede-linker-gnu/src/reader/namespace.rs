@@ -14,12 +14,9 @@ use super::{
     Stable, StructureKind, ViAddr, module::Modules,
 };
 use crate::{
-    abi::{DebugPointer, ElfAddress, ExtendedPointer},
+    abi::{DebugPointer, ElfAddress, ExtendedPointer, GNU_EXTENDED_PROTOCOL_VERSION},
     error::InconsistentReason,
-    snapshot::{
-        GNU_EXTENDED_PROTOCOL_VERSION,
-        model::{Namespace, Rendezvous},
-    },
+    snapshot::{Namespace, Rendezvous},
 };
 
 /// GNU rendezvous proven consistent at one stable observation.

@@ -20,7 +20,6 @@ use crate::class::{Class, Elf32, Elf64};
 /// behavior distinct from ELF64 while sharing the translation algorithm.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-// NOTE(invariant): The retained word has the selected ELF class width and every image-address translation uses checked arithmetic in that width before widening to `ViAddr`.
 pub struct LoadBias<ClassType>(
     /// Proven image load bias in the selected ELF word width.
     ClassType::Word,
