@@ -114,6 +114,9 @@ pub enum Atom {
     /// Read one little-endian unsigned dword into a capture slot.
     ReadU32(u8),
 
+    /// Resolve one signed little-endian dword relative to its end into a virtual-address capture.
+    ReadRel32(u8),
+
     /// Store zero in one capture slot when present.
     Zero(u8),
 
@@ -142,6 +145,7 @@ impl Atom {
             | Self::ReadU16(slot)
             | Self::ReadI32(slot)
             | Self::ReadU32(slot)
+            | Self::ReadRel32(slot)
             | Self::Zero(slot) => Some(slot),
             _ => None,
         }
@@ -208,6 +212,11 @@ impl<'pattern> Pattern<'pattern> {
     ///
     /// This entry point exists for the companion procedural macro. Empty fixed slices select the
     /// interpreter path. Nonempty fixed slices must have equal lengths.
+    ///
+    /// # Panics
+    ///
+    /// This panics when the atom stream is empty, fixed slices differ in length, or a nonempty fixed
+    /// projection does not represent the supplied atom stream.
     #[doc(hidden)]
     #[inline]
     #[must_use]
@@ -403,7 +412,9 @@ impl FromStr for PatternBuf {
 }
 
 pub mod prelude {
-    //! Convenience imports for executable pattern construction and scanning.
+    //! This is the `ganymede-pattern-core::pattern` prelude.
+    //!
+    //! It re-exports executable pattern construction, parsing, and scanning concepts.
 
     pub use super::scan::{Matches, Scanner};
     pub use super::syntax::{ParseError, ParseErrorKind, parse};

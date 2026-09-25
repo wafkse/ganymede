@@ -10,7 +10,6 @@ const MINIMUM_ANCHOR_BYTES: usize = 2;
 
 /// Precomputed strategy used to discover candidate pattern starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// NOTE(invariant): Every stored range and probe was derived from the same validated byte and mask slices retained by `Pattern`.
 pub enum SearchPlan {
     /// Every pattern bit is constrained and the whole pattern is a substring needle.
     Literal,

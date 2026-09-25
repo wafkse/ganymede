@@ -429,6 +429,7 @@ impl<'pattern> Scanner<'pattern> {
                 | Atom::ReadU16(..)
                 | Atom::ReadI32(..)
                 | Atom::ReadU32(..)
+                | Atom::ReadRel32(..)
                 | Atom::Zero(..) => {
                     self.capture(target_haystack, target_exec, target_saves, target_atom)
                 }
@@ -725,9 +726,39 @@ impl<'pattern> Scanner<'pattern> {
                 };
                 *cursor = target_cursor;
             }
+            Atom::ReadRel32(target_slot) => {
+                return self.capture_relative(target_haystack, cursor, target_saves, target_slot);
+            }
             Atom::Zero(target_slot) => Self::write(target_saves, target_slot, 0),
             _ => return false,
         }
+
+        true
+    }
+
+    /// Resolve one signed rel32 capture without constraining the target to the byte image.
+    fn capture_relative(
+        &self,
+        target_haystack: &[u8],
+        target_cursor: &mut usize,
+        target_saves: &mut [u64],
+        target_slot: u8,
+    ) -> bool {
+        let Some(target_displacement) = Self::read_i32(target_haystack, *target_cursor) else {
+            return false;
+        };
+        let Some(target_resume_offset) = target_cursor.checked_add(4) else {
+            return false;
+        };
+        let Some(target_resume) = self.absolute(target_resume_offset) else {
+            return false;
+        };
+        let Some(target_value) = Self::relative_u64(target_resume, target_displacement) else {
+            return false;
+        };
+
+        Self::write(target_saves, target_slot, target_value);
+        *target_cursor = target_resume_offset;
 
         true
     }
@@ -1114,6 +1145,23 @@ mod tests {
         assert_eq!(control_saves[0], 0x1000);
         assert!(pir.exec(&[4, 0, 0, 0, 0x42], 0, &mut pir_saves));
         assert_eq!(pir_saves[0], 0x2000);
+    }
+
+    #[test]
+    fn relative_address_capture_can_resolve_outside_the_byte_image() {
+        let target_pattern = Box::leak(Box::new(
+            PatternBuf::parse("48 8D 05 r4 90").expect("relative capture should parse"),
+        ));
+        let target_scanner =
+            Scanner::with_base(target_pattern.as_pattern(), PointerWidth::U64, 0x1000);
+        let target_haystack = [0x48, 0x8d, 0x05, 0xf9, 0x1f, 0x00, 0x00, 0x90];
+        let mut saves = [0_u64; 2];
+
+        assert_eq!(
+            target_scanner.find_with(&target_haystack, &mut saves),
+            Some(0)
+        );
+        assert_eq!(saves, [0x1000, 0x3000]);
     }
 
     #[test]

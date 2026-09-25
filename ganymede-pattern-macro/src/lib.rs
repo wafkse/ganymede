@@ -8,7 +8,7 @@
 #![deny(missing_docs)]
 #![deny(clippy::missing_docs_in_private_items)]
 
-use ganymede_pattern_core::{Atom, PatternBuf};
+use ganymede_pattern_core::pattern::{Atom, PatternBuf};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::LitStr;
@@ -16,7 +16,7 @@ use syn::LitStr;
 /// Compile one string literal into a static `ganymede_pattern::Pattern`.
 ///
 /// Expansion accepts the unified Pelite-style syntax implemented by
-/// [`ganymede_pattern_core::PatternBuf::parse`]. Invalid syntax becomes a compiler error at the
+/// [`ganymede_pattern_core::pattern::PatternBuf::parse`]. Invalid syntax becomes a compiler error at the
 /// literal span. Successful expansion performs no runtime parsing or allocation.
 #[proc_macro]
 #[inline]
@@ -112,6 +112,9 @@ impl<'literal> PatternExpansion<'literal> {
             }
             Atom::ReadU32(target_slot) => {
                 quote!(::ganymede_pattern::export::Atom::ReadU32(#target_slot))
+            }
+            Atom::ReadRel32(target_slot) => {
+                quote!(::ganymede_pattern::export::Atom::ReadRel32(#target_slot))
             }
             Atom::Zero(target_slot) => quote!(::ganymede_pattern::export::Atom::Zero(#target_slot)),
             Atom::Case(target_next) => quote!(::ganymede_pattern::export::Atom::Case(#target_next)),

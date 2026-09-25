@@ -15,7 +15,6 @@ use super::super::{Fixed, Probe};
 /// so all slice access remains ordinary safe Rust and every load is checked before it reaches the
 /// SIMD abstraction.
 #[derive(Debug, Clone, Copy)]
-// NOTE(invariant): The stored SIMD value is the capability selected for the complete operation, so vector width and comparison semantics remain consistent across every probe and verification step.
 pub struct Vector<SimdType: Simd>(SimdType);
 
 impl<SimdType: Simd> Vector<SimdType> {

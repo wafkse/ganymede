@@ -8,7 +8,11 @@
 #![deny(missing_docs)]
 #![deny(clippy::missing_docs_in_private_items)]
 
-pub use ganymede_pattern_core::*;
+pub use ganymede_pattern_core::pattern::{
+    Atom, Pattern, PatternBuf, PatternError, PointerWidth,
+    scan::{Matches, Scanner},
+    syntax::{ParseError, ParseErrorKind, parse},
+};
 
 #[doc(hidden)]
 pub mod export {
@@ -17,15 +21,19 @@ pub mod export {
     //! Expansion occurs in downstream crates, so these names must remain publicly reachable even
     //! though this namespace is not part of the supported user-facing API.
 
-    pub use ganymede_pattern_core::{Atom, Pattern};
+    pub use ganymede_pattern_core::pattern::{Atom, Pattern};
     pub use ganymede_pattern_macro::pattern;
 }
 
 pub use export::pattern;
 
 pub mod prelude {
-    //! Convenience imports for runtime and compile-time binary pattern scanning.
+    //! This is the `ganymede-pattern` prelude.
+    //!
+    //! It re-exports runtime pattern construction, parsing, scanning, and the compile-time macro.
 
-    pub use crate::pattern;
-    pub use ganymede_pattern_core::prelude::*;
+    pub use crate::{
+        Atom, Matches, ParseError, ParseErrorKind, Pattern, PatternBuf, PatternError, PointerWidth,
+        Scanner, parse, pattern,
+    };
 }

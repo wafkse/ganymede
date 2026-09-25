@@ -3,7 +3,7 @@
 #![forbid(clippy::unwrap_used, clippy::panic, rustdoc::all)]
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use ganymede_pattern_core::{PatternBuf, PointerWidth, Scanner};
+use ganymede_pattern_core::pattern::{PatternBuf, PointerWidth, scan::Scanner};
 use std::hint::black_box;
 
 /// One Criterion context while the pattern scanning benchmark suite is registered.

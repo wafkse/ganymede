@@ -10,17 +10,14 @@
 
 pub mod pattern;
 
-pub use pattern::{
-    Atom, Pattern, PatternBuf, PatternError, PointerWidth,
-    scan::{Matches, Scanner},
-    syntax::{ParseError, ParseErrorKind, parse},
-};
-
 pub mod prelude {
-    //! Convenience imports for unified binary pattern construction and scanning.
+    //! This is the `ganymede-pattern-core` prelude.
+    //!
+    //! It re-exports the pattern model, parser, and scanner concepts used together by consumers.
 
-    pub use crate::{
-        Atom, Matches, ParseError, ParseErrorKind, Pattern, PatternBuf, PatternError, PointerWidth,
-        Scanner, parse,
+    pub use crate::pattern::{
+        Atom, Pattern, PatternBuf, PatternError, PointerWidth,
+        scan::{Matches, Scanner},
+        syntax::{ParseError, ParseErrorKind, parse},
     };
 }

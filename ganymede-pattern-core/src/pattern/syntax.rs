@@ -15,7 +15,8 @@ use super::Atom;
 ///
 /// Ganymede accepts Pelite's exact-byte, whole-wildcard, fixed and variable skip, capture, follow,
 /// followed-subpattern, alignment, integer-read, zero, quoted-byte, and alternative syntax. It also
-/// accepts nibble wildcards and lowers them to `Fuzzy` plus `Byte` atoms.
+/// accepts `r4` for a signed dword relative virtual-address capture and nibble wildcards lowered to
+/// `Fuzzy` plus `Byte` atoms.
 ///
 /// # Errors
 ///
@@ -56,6 +57,9 @@ pub enum ParseErrorKind {
     /// An integer read marker had no supported width operand.
     ReadOperand,
 
+    /// A relative-address read marker had no supported width operand.
+    RelativeOperand,
+
     /// A followed subpattern reached source end before its closing brace.
     SubPattern,
 
@@ -81,6 +85,9 @@ impl core::fmt::Display for ParseErrorKind {
             Self::SaveOverflow => target_formatter.write_str("too many pattern capture slots"),
             Self::AlignedOperand => target_formatter.write_str("invalid alignment operand"),
             Self::ReadOperand => target_formatter.write_str("invalid integer read operand"),
+            Self::RelativeOperand => {
+                target_formatter.write_str("invalid relative-address read operand")
+            }
             Self::SubPattern => target_formatter.write_str("invalid followed subpattern"),
             Self::Alternative => target_formatter.write_str("invalid alternative group"),
         }
@@ -231,6 +238,7 @@ impl<'source> Parser<'source> {
             b'@' => target_atoms.push(self.aligned(target_start)?),
             b'i' => target_atoms.push(self.read(target_start, true)?),
             b'u' => target_atoms.push(self.read(target_start, false)?),
+            b'r' => target_atoms.push(self.relative_read(target_start)?),
             b'z' => target_atoms.push(Atom::Zero(self.slot()?)),
             b'(' => self.choice(target_atoms, target_start)?,
             b'?' => self.byte(target_atoms, target_start, target_leading)?,
@@ -424,6 +432,24 @@ impl<'source> Parser<'source> {
         };
 
         Ok(atom)
+    }
+
+    /// Parse one signed dword relative virtual-address read and assign its capture slot.
+    fn relative_read(&mut self, target_start: usize) -> Result<Atom, ParseError> {
+        let target_width = self
+            .take()
+            .ok_or_else(|| ParseError::new(target_start, ParseErrorKind::RelativeOperand))?;
+
+        if target_width != b'4' {
+            return Err(ParseError::new(
+                target_start,
+                ParseErrorKind::RelativeOperand,
+            ));
+        }
+
+        let slot = self.slot()?;
+
+        Ok(Atom::ReadRel32(slot))
     }
 
     /// Parse one parenthesized alternative group and lower it to case and break atoms.
@@ -632,7 +658,9 @@ impl<'source> Parser<'source> {
 }
 
 pub mod prelude {
-    //! Convenience imports for executable pattern parsing.
+    //! This is the `ganymede-pattern-core::pattern::syntax` prelude.
+    //!
+    //! It re-exports the parser entry point and structured parse failures.
 
     pub use super::{ParseError, ParseErrorKind, parse};
 }
@@ -662,6 +690,13 @@ mod tests {
         assert!(atoms.contains(&Atom::Skip(16)));
         assert!(atoms.contains(&Atom::Skip(13)));
         assert!(atoms.contains(&Atom::Many(29)));
+    }
+
+    #[test]
+    fn relative_dword_read_lowers_to_address_capture() {
+        let atoms = parse("48 8D 05 r4 90").expect("relative-address capture should parse");
+
+        assert!(atoms.contains(&Atom::ReadRel32(1)));
     }
 
     #[test]
@@ -729,6 +764,7 @@ mod tests {
             ("(41|)", ParseErrorKind::Alternative),
             ("${41", ParseErrorKind::SubPattern),
             ("u8", ParseErrorKind::ReadOperand),
+            ("r1", ParseErrorKind::RelativeOperand),
             ("@!", ParseErrorKind::AlignedOperand),
         ];
 
