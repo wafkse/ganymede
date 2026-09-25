@@ -1,7 +1,7 @@
 //! Format-neutral process inspection over Catalejo-managed foreign memory.
 //!
-//! This crate owns process attachment, typed access, owned byte acquisition, and kernel
-//! address-space observations. Executable formats and runtime-linker protocols remain outside
+//! This crate owns process attachment, typed access, peephole management, and kernel
+//! address-space snapshots. Executable formats and runtime-linker protocols remain outside
 //! this boundary so other image formats can reuse the same process machinery.
 #![deny(clippy::all, clippy::perf, clippy::nursery, clippy::pedantic)]
 #![forbid(clippy::unwrap_used, clippy::panic, rustdoc::all)]
@@ -10,14 +10,17 @@
 
 pub mod process;
 
-pub mod prelude {
-    //! Convenience imports for the process-inspection boundary.
-    //!
-    //! This module exists only to provide one import path for the process-facing concepts that are
-    //! commonly composed by downstream crates. It adds no behavior, validation, or interpretation.
+pub mod snapshot;
 
-    pub use crate::process::{
-        AccessError, Attributes, AuxiliaryVectorEntry, Backing, FileBacking, FileIdentity, Process,
-        ProcessId, ReadError, Region, Snapshot, SnapshotError,
+pub mod prelude {
+    //! This is the `ganymede-process` prelude.
+    //!
+    //! It re-exports process access, snapshot metadata, and their structured failures.
+
+    pub use crate::snapshot::{
+        Attributes, AuxiliaryVectorEntry, Backing, FileBacking, FileIdentity, Region, Snapshot,
+        SnapshotError,
     };
+
+    pub use crate::process::{AccessError, Process, ProcessId, ReadError};
 }

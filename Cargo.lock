@@ -34,6 +34,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "allocator-api2"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
 name = "anes"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -92,8 +98,6 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 [[package]]
 name = "catalejo"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dc070843668324c38863cb03eece9585a77bc38d11d0d8af2759a9044b395db"
 dependencies = [
  "bitflags",
  "catalejo-fault",
@@ -101,7 +105,9 @@ dependencies = [
  "catalejo-memory",
  "catalejo-sys",
  "dashmap",
+ "fack",
  "libc",
+ "lru",
  "nix",
  "num-traits",
 ]
@@ -109,21 +115,15 @@ dependencies = [
 [[package]]
 name = "catalejo-fault"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1c5447afe206de806788482c1b25c20f59f4bbc4e4ce144f86a9cc5b5d91b46"
 dependencies = [
- "bindgen",
  "catalejo-memory",
- "cc",
+ "catalejo-sys",
  "tokel",
- "walkdir",
 ]
 
 [[package]]
 name = "catalejo-macro"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2f8f7fed35798ceb9d15771912af020d53e861c361f858e599b012684d8736d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -133,17 +133,17 @@ dependencies = [
 [[package]]
 name = "catalejo-memory"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c908b75e98c1cc1948657c100435a4a2cd6d48f4ee2e2f5e72e5a5e3c4062ab8"
 
 [[package]]
 name = "catalejo-sys"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d89194fe6ef28c5bee4f734b0e3e175e84e96c61e8c1a27b91c326e4bb67264"
 dependencies = [
  "bindgen",
+ "catalejo-memory",
  "cc",
+ "fack",
+ "libc",
+ "tokel",
  "walkdir",
 ]
 
@@ -315,7 +315,7 @@ checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
- "hashbrown",
+ "hashbrown 0.14.5",
  "lock_api",
  "once_cell",
  "parking_lot_core",
@@ -326,6 +326,12 @@ name = "either"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
+
+[[package]]
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "fack"
@@ -375,6 +381,12 @@ name = "find-msvc-tools"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26b73573e6edcd2af0cdf47bd6cb58f0b3839491263c314eaad1ccf24430e1de"
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "futures-core"
@@ -488,6 +500,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ganymede-scan"
+version = "0.1.0"
+dependencies = [
+ "catalejo",
+ "fack",
+ "ganymede-process",
+ "memchr",
+]
+
+[[package]]
 name = "ganymede-text"
 version = "0.1.0"
 
@@ -525,6 +547,17 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+
+[[package]]
+name = "hashbrown"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash",
+]
 
 [[package]]
 name = "heck"
@@ -588,6 +621,15 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "lru"
+version = "0.18.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff9840bcc50b71349309900da0ce7279aa336ae71d73250b07998932c7d97c25"
+dependencies = [
+ "hashbrown 0.17.1",
+]
 
 [[package]]
 name = "memchr"
@@ -883,9 +925,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.2"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
 
 [[package]]
 name = "syn"
@@ -921,9 +963,9 @@ dependencies = [
 
 [[package]]
 name = "tokel"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f395a3c2eb00066caf6a1b31587723bb06a6e56c72d394fafb283dd668b097c3"
+checksum = "0a8cfbeb901dacf9b2d2e1005d01fd5e5dd8c598bec0aab0f572d6e546229f96"
 dependencies = [
  "tokel-derive",
 ]

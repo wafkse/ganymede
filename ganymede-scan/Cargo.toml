@@ -1,0 +1,13 @@
+[package]
+name = "ganymede-scan"
+version = "0.1.0"
+edition = "2024"
+description = "Bounded byte scanning over explicit foreign process ranges"
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+catalejo.workspace = true
+ganymede-process.workspace = true
+memchr.workspace = true
+fack.workspace = true

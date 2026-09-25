@@ -9,6 +9,7 @@ members = [
     "ganymede-pattern-core",
     "ganymede-pattern-macro",
     "ganymede-pattern",
+    "ganymede-scan",
 ]
 resolver = "3"
 
@@ -18,7 +19,7 @@ repository = "https://github.com/wafkse/ganymede"
 
 [workspace.dependencies]
 bitflags = "2.10"
-catalejo = "0.1.0"
+catalejo = { version = "0.1.0", default-features = false, features = ["write"] }
 ganymede-process = { path = "ganymede-process", version = "0.1.0" }
 ganymede-text = { path = "ganymede-text", version = "0.1.0" }
 ganymede-elf = { path = "ganymede-elf", version = "0.1.0" }
@@ -27,6 +28,7 @@ ganymede-module = { path = "ganymede-module", version = "0.1.0" }
 ganymede-pattern-core = { path = "ganymede-pattern-core", version = "0.1.0" }
 ganymede-pattern-macro = { path = "ganymede-pattern-macro", version = "0.1.0" }
 ganymede-pattern = { path = "ganymede-pattern", version = "0.1.0" }
+ganymede-scan = { path = "ganymede-scan", version = "0.1.0" }
 fack = "0.2.0"
 memchr = "2.8.2"
 num-traits = "0.2.19"
@@ -38,3 +40,10 @@ prettyplease = "0.2"
 syn = { version = "2", features = ["full", "visit-mut"] }
 cc = { version = "1.4.2" }
 zerocopy = "0.8.56"
+
+[workspace.lints.clippy]
+struct_field_names = "allow"
+
+
+[patch.crates-io]
+catalejo = { path = "../catalejo/catalejo" }
